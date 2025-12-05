@@ -424,16 +424,17 @@ curl -s -X POST "https://your-server.deno.dev/mcp" \
 curl -X POST "https://your-server.deno.dev/mcp" \
   -H "Authorization: Bearer user-token-1" \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","method":"initialize",...}'
 
-# Check token stats (requires ADMIN token)
-curl "https://your-server.deno.dev/admin/tokens" \
-  -H "Authorization: Bearer admin-token"
+# Check your own token usage
+curl -s "https://your-server.deno.dev/mcp/usage" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+# Response: {"userId":"alice","role":"user","expiresAt":null,"isExpired":false,"usageCount":42,"lastUsedAt":"2025-12-05T10:30:00.000Z"}
 
-# User tokens cannot access admin endpoints (returns 403)
-curl "https://your-server.deno.dev/admin/tokens" \
-  -H "Authorization: Bearer user-token-1"
-# Response: {"error": {"code": -32001, "message": "Forbidden: Admin token required"}}
+# Check all token stats (requires ADMIN token)
+curl -s "https://your-server.deno.dev/admin/tokens" \
+  -H "Authorization: Bearer admin-token"
 ```
 
 ---
