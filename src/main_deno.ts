@@ -301,12 +301,84 @@ async function handleRequest(req: Request): Promise<Response> {
 }
 
 /**
+ * Create a Node.js-style IncomingMessage-like object from a Deno Request
+ */
+function createNodeStyleRequest(req: Request, body: string): any {
+  const url = new URL(req.url);
+  const headers: Record<string, string> = {};
+  req.headers.forEach((value, key) => {
+    headers[key.toLowerCase()] = value;
+  });
+
+  return {
+    method: req.method,
+    url: url.pathname + url.search,
+    headers,
+    // The body is passed separately to handleRequest
+  };
+}
+
+/**
+ * Create a Node.js-style ServerResponse-like object that collects the response
+ */
+function createNodeStyleResponse(): { 
+  res: any; 
+  getResponse: () => { status: number; headers: Record<string, string>; body: string } 
+} {
+  let statusCode = 200;
+  const headers: Record<string, string> = {};
+  let body = '';
+  let headersSent = false;
+
+  const res = {
+    statusCode,
+    setHeader(name: string, value: string) {
+      headers[name.toLowerCase()] = value;
+    },
+    getHeader(name: string) {
+      return headers[name.toLowerCase()];
+    },
+    writeHead(status: number, responseHeaders?: Record<string, string>) {
+      statusCode = status;
+      if (responseHeaders) {
+        Object.entries(responseHeaders).forEach(([key, value]) => {
+          headers[key.toLowerCase()] = value;
+        });
+      }
+      headersSent = true;
+    },
+    write(chunk: string | Buffer) {
+      body += typeof chunk === 'string' ? chunk : chunk.toString();
+      return true;
+    },
+    end(data?: string | Buffer) {
+      if (data) {
+        body += typeof data === 'string' ? data : data.toString();
+      }
+    },
+    on(_event: string, _listener: () => void) {
+      // No-op for Deno
+      return res;
+    },
+    headersSent,
+  };
+
+  return {
+    res,
+    getResponse: () => ({ status: statusCode, headers, body }),
+  };
+}
+
+/**
  * Handle MCP POST requests (new messages)
  */
 async function handleMcpPost(req: Request, debug: boolean): Promise<Response> {
   try {
     const sessionId = req.headers.get('mcp-session-id');
     let transport: StreamableHTTPServerTransport;
+
+    const body = await req.text();
+    const parsedBody = body ? JSON.parse(body) : {};
 
     if (sessionId && sessions.has(sessionId)) {
       transport = sessions.get(sessionId)!;
@@ -324,11 +396,15 @@ async function handleMcpPost(req: Request, debug: boolean): Promise<Response> {
       await server.server.connect(transport);
     }
 
-    // Process the request
-    const body = await req.text();
-    const response = await transport.handleRequest(req.method, req.headers, body);
+    // Create Node.js-style req/res objects
+    const nodeReq = createNodeStyleRequest(req, body);
+    const { res: nodeRes, getResponse } = createNodeStyleResponse();
 
-    return new Response(response.body, {
+    // Process the request with Node-style objects
+    await transport.handleRequest(nodeReq, nodeRes, parsedBody);
+
+    const response = getResponse();
+    return new Response(response.body || null, {
       status: response.status,
       headers: response.headers,
     });
@@ -358,8 +434,13 @@ async function handleMcpGet(req: Request, debug: boolean): Promise<Response> {
   const transport = sessions.get(sessionId)!;
   
   try {
-    const response = await transport.handleRequest(req.method, req.headers, '');
-    return new Response(response.body, {
+    const nodeReq = createNodeStyleRequest(req, '');
+    const { res: nodeRes, getResponse } = createNodeStyleResponse();
+    
+    await transport.handleRequest(nodeReq, nodeRes);
+    
+    const response = getResponse();
+    return new Response(response.body || null, {
       status: response.status,
       headers: response.headers,
     });
