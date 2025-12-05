@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG } from "./config.js";
 import { DeepResearchCheckResponse, DeepResearchErrorResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
+import { makeExaRequest } from "../utils/exaClient.js";
 
 // Helper function to create a delay
 function delay(ms: number): Promise<void> {
@@ -28,26 +29,18 @@ export function registerDeepResearchCheckTool(server: McpServer, config?: { exaA
         logger.log("Waiting 5 seconds before checking status...");
         await delay(5000);
 
-        // Create a fresh axios instance for each request
-        const axiosInstance = axios.create({
-          baseURL: API_CONFIG.BASE_URL,
-          headers: {
-            'accept': 'application/json',
-            'x-api-key': config?.exaApiKey || process.env.EXA_API_KEY || ''
-          },
-          timeout: 25000
-        });
-
         logger.log(`Checking status for task: ${taskId}`);
         
-        const response = await axiosInstance.get<DeepResearchCheckResponse>(
+        // Use makeExaRequest for automatic key rotation on balance errors
+        const responseData = await makeExaRequest<DeepResearchCheckResponse>(
           `${API_CONFIG.ENDPOINTS.RESEARCH_TASKS}/${taskId}`,
-          { timeout: 25000 }
+          null,
+          { exaApiKey: config?.exaApiKey, timeout: 25000, method: 'GET' }
         );
         
-        logger.log(`Task status: ${response.data.status}`);
+        logger.log(`Task status: ${responseData.status}`);
 
-        if (!response.data) {
+        if (!responseData) {
           logger.log("Warning: Empty response from Exa Research API");
           return {
             content: [{
@@ -61,36 +54,36 @@ export function registerDeepResearchCheckTool(server: McpServer, config?: { exaA
         // Format the response based on status
         let resultText: string;
         
-        if (response.data.status === 'completed') {
+        if (responseData.status === 'completed') {
           // Task completed - return only the essential research report to avoid context overflow
           resultText = JSON.stringify({
             success: true,
-            status: response.data.status,
-            taskId: response.data.id,
-            report: response.data.data?.report || "No report generated",
-            timeMs: response.data.timeMs,
-            model: response.data.model,
+            status: responseData.status,
+            taskId: responseData.id,
+            report: responseData.data?.report || "No report generated",
+            timeMs: responseData.timeMs,
+            model: responseData.model,
             message: "🎉 Deep research completed! Here's your comprehensive research report."
           }, null, 2);
           logger.log("Research completed successfully");
-        } else if (response.data.status === 'running') {
+        } else if (responseData.status === 'running') {
           // Task still running - return minimal status to avoid filling context window
           resultText = JSON.stringify({
             success: true,
-            status: response.data.status,
-            taskId: response.data.id,
+            status: responseData.status,
+            taskId: responseData.id,
             message: "🔄 Research in progress. Continue polling...",
             nextAction: "Call deep_researcher_check again with the same task ID"
           }, null, 2);
           logger.log("Research still in progress");
-        } else if (response.data.status === 'failed') {
+        } else if (responseData.status === 'failed') {
           // Task failed
           resultText = JSON.stringify({
             success: false,
-            status: response.data.status,
-            taskId: response.data.id,
-            createdAt: new Date(response.data.createdAt).toISOString(),
-            instructions: response.data.instructions,
+            status: responseData.status,
+            taskId: responseData.id,
+            createdAt: new Date(responseData.createdAt).toISOString(),
+            instructions: responseData.instructions,
             message: "❌ Deep research task failed. Please try starting a new research task with different instructions."
           }, null, 2);
           logger.log("Research task failed");
@@ -98,11 +91,11 @@ export function registerDeepResearchCheckTool(server: McpServer, config?: { exaA
           // Unknown status
           resultText = JSON.stringify({
             success: false,
-            status: response.data.status,
-            taskId: response.data.id,
-            message: `⚠️ Unknown status: ${response.data.status}. Continue polling or restart the research task.`
+            status: responseData.status,
+            taskId: responseData.id,
+            message: `⚠️ Unknown status: ${responseData.status}. Continue polling or restart the research task.`
           }, null, 2);
-          logger.log(`Unknown status: ${response.data.status}`);
+          logger.log(`Unknown status: ${responseData.status}`);
         }
 
         const result = {

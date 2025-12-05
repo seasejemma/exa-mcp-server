@@ -3,6 +3,7 @@ import axios from "axios";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG } from "./config.js";
 import { createRequestLogger } from "../utils/logger.js";
+import { makeExaRequest } from "../utils/exaClient.js";
 
 export function registerCrawlingTool(server: McpServer, config?: { exaApiKey?: string }): void {
   server.tool(
@@ -19,17 +20,6 @@ export function registerCrawlingTool(server: McpServer, config?: { exaApiKey?: s
       logger.start(url);
       
       try {
-        // Create a fresh axios instance for each request
-        const axiosInstance = axios.create({
-          baseURL: API_CONFIG.BASE_URL,
-          headers: {
-            'accept': 'application/json',
-            'content-type': 'application/json',
-            'x-api-key': config?.exaApiKey || process.env.EXA_API_KEY || ''
-          },
-          timeout: 25000
-        });
-
         const crawlRequest = {
           ids: [url],
           contents: {
@@ -42,15 +32,16 @@ export function registerCrawlingTool(server: McpServer, config?: { exaApiKey?: s
         
         logger.log("Sending crawl request to Exa API");
         
-        const response = await axiosInstance.post(
+        // Use makeExaRequest for automatic key rotation on balance errors
+        const responseData = await makeExaRequest<{ results: any[] }>(
           '/contents',
           crawlRequest,
-          { timeout: 25000 }
+          { exaApiKey: config?.exaApiKey, timeout: 25000 }
         );
         
         logger.log("Received response from Exa API");
 
-        if (!response.data || !response.data.results) {
+        if (!responseData || !responseData.results) {
           logger.log("Warning: Empty or invalid response from Exa API");
           return {
             content: [{
@@ -65,7 +56,7 @@ export function registerCrawlingTool(server: McpServer, config?: { exaApiKey?: s
         const result = {
           content: [{
             type: "text" as const,
-            text: JSON.stringify(response.data, null, 2)
+            text: JSON.stringify(responseData, null, 2)
           }]
         };
         

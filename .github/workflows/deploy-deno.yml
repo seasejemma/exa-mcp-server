@@ -1,0 +1,44 @@
+name: Deploy to Deno Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write  # Needed for auth with Deno Deploy
+      contents: read   # Needed to clone the repository
+
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+
+      - name: Install Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Verify Deno installation
+        run: deno --version
+
+      - name: Type check
+        run: deno check src/main_deno.ts
+        continue-on-error: true  # Don't fail on type errors during initial setup
+
+      - name: Deploy to Deno Deploy
+        uses: denoland/deployctl@v1
+        with:
+          project: "exa-mcp-server"
+          entrypoint: "src/main_deno.ts"
+          root: "."
+        env:
+          EXA_API_KEYS: ${{ secrets.EXA_API_KEYS }}
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
+          DEBUG: "false"

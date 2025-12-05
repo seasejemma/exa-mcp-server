@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG } from "./config.js";
 import { ExaCodeRequest, ExaCodeResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
+import { makeExaRequest } from "../utils/exaClient.js";
 
 export function registerExaCodeTool(server: McpServer, config?: { exaApiKey?: string }): void {
   server.tool(
@@ -25,17 +26,6 @@ export function registerExaCodeTool(server: McpServer, config?: { exaApiKey?: st
       logger.start(`Searching for code context: ${query}`);
       
       try {
-        // Create a fresh axios instance for each request
-        const axiosInstance = axios.create({
-          baseURL: API_CONFIG.BASE_URL,
-          headers: {
-            'accept': 'application/json',
-            'content-type': 'application/json',
-            'x-api-key': config?.exaApiKey || process.env.EXA_API_KEY || ''
-          },
-          timeout: 30000
-        });
-
         const exaCodeRequest: ExaCodeRequest = {
           query,
           tokensNum
@@ -43,15 +33,16 @@ export function registerExaCodeTool(server: McpServer, config?: { exaApiKey?: st
         
         logger.log("Sending code context request to Exa API");
         
-        const response = await axiosInstance.post<ExaCodeResponse>(
+        // Use makeExaRequest for automatic key rotation on balance errors
+        const responseData = await makeExaRequest<ExaCodeResponse>(
           API_CONFIG.ENDPOINTS.CONTEXT,
           exaCodeRequest,
-          { timeout: 30000 }
+          { exaApiKey: config?.exaApiKey, timeout: 30000 }
         );
         
         logger.log("Received code context response from Exa API");
 
-        if (!response.data) {
+        if (!responseData) {
           logger.log("Warning: Empty response from Exa Code API");
           return {
             content: [{
@@ -61,12 +52,12 @@ export function registerExaCodeTool(server: McpServer, config?: { exaApiKey?: st
           };
         }
 
-        logger.log(`Code search completed with ${response.data.resultsCount || 0} results`);
+        logger.log(`Code search completed with ${responseData.resultsCount || 0} results`);
         
         // Return the actual code content from the response field
-        const codeContent = typeof response.data.response === 'string' 
-          ? response.data.response 
-          : JSON.stringify(response.data.response, null, 2);
+        const codeContent = typeof responseData.response === 'string' 
+          ? responseData.response 
+          : JSON.stringify(responseData.response, null, 2);
         
         const result = {
           content: [{

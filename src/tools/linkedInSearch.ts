@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG } from "./config.js";
 import { ExaSearchRequest, ExaSearchResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
+import { makeExaRequest } from "../utils/exaClient.js";
 
 export function registerLinkedInSearchTool(server: McpServer, config?: { exaApiKey?: string }): void {
   server.tool(
@@ -21,17 +22,6 @@ export function registerLinkedInSearchTool(server: McpServer, config?: { exaApiK
       logger.start(`${query} (${searchType || 'all'})`);
       
       try {
-        // Create a fresh axios instance for each request
-        const axiosInstance = axios.create({
-          baseURL: API_CONFIG.BASE_URL,
-          headers: {
-            'accept': 'application/json',
-            'content-type': 'application/json',
-            'x-api-key': config?.exaApiKey || process.env.EXA_API_KEY || ''
-          },
-          timeout: 25000
-        });
-
         let searchQuery = query;
         if (searchType === "profiles") {
           searchQuery = `${query} LinkedIn profile`;
@@ -56,15 +46,16 @@ export function registerLinkedInSearchTool(server: McpServer, config?: { exaApiK
         
         logger.log("Sending request to Exa API for LinkedIn search");
         
-        const response = await axiosInstance.post<ExaSearchResponse>(
+        // Use makeExaRequest for automatic key rotation on balance errors
+        const responseData = await makeExaRequest<ExaSearchResponse>(
           API_CONFIG.ENDPOINTS.SEARCH,
           searchRequest,
-          { timeout: 25000 }
+          { exaApiKey: config?.exaApiKey, timeout: 25000 }
         );
         
         logger.log("Received response from Exa API");
 
-        if (!response.data || !response.data.results) {
+        if (!responseData || !responseData.results) {
           logger.log("Warning: Empty or invalid response from Exa API");
           return {
             content: [{
@@ -74,12 +65,12 @@ export function registerLinkedInSearchTool(server: McpServer, config?: { exaApiK
           };
         }
 
-        logger.log(`Found ${response.data.results.length} LinkedIn results`);
+        logger.log(`Found ${responseData.results.length} LinkedIn results`);
         
         const result = {
           content: [{
             type: "text" as const,
-            text: JSON.stringify(response.data, null, 2)
+            text: JSON.stringify(responseData, null, 2)
           }]
         };
         

@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG } from "./config.js";
 import { DeepResearchRequest, DeepResearchStartResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
+import { makeExaRequest } from "../utils/exaClient.js";
 
 export function registerDeepResearchStartTool(server: McpServer, config?: { exaApiKey?: string }): void {
   server.tool(
@@ -20,17 +21,6 @@ export function registerDeepResearchStartTool(server: McpServer, config?: { exaA
       logger.start(instructions);
       
       try {
-        // Create a fresh axios instance for each request
-        const axiosInstance = axios.create({
-          baseURL: API_CONFIG.BASE_URL,
-          headers: {
-            'accept': 'application/json',
-            'content-type': 'application/json',
-            'x-api-key': config?.exaApiKey || process.env.EXA_API_KEY || ''
-          },
-          timeout: 25000
-        });
-
         const researchRequest: DeepResearchRequest = {
           model: model || 'exa-research',
           instructions,
@@ -41,15 +31,16 @@ export function registerDeepResearchStartTool(server: McpServer, config?: { exaA
         
         logger.log(`Starting research with model: ${researchRequest.model}`);
         
-        const response = await axiosInstance.post<DeepResearchStartResponse>(
+        // Use makeExaRequest for automatic key rotation on balance errors
+        const responseData = await makeExaRequest<DeepResearchStartResponse>(
           API_CONFIG.ENDPOINTS.RESEARCH_TASKS,
           researchRequest,
-          { timeout: 25000 }
+          { exaApiKey: config?.exaApiKey, timeout: 25000 }
         );
         
-        logger.log(`Research task started with ID: ${response.data.id}`);
+        logger.log(`Research task started with ID: ${responseData.id}`);
 
-        if (!response.data || !response.data.id) {
+        if (!responseData || !responseData.id) {
           logger.log("Warning: Empty or invalid response from Exa Research API");
           return {
             content: [{
@@ -65,12 +56,12 @@ export function registerDeepResearchStartTool(server: McpServer, config?: { exaA
             type: "text" as const,
             text: JSON.stringify({
               success: true,
-              taskId: response.data.id,
+              taskId: responseData.id,
               model: researchRequest.model,
               instructions: instructions,
-              outputSchema: response.data.outputSchema,
-              message: `Deep research task started successfully with ${researchRequest.model} model. IMMEDIATELY use deep_researcher_check with task ID '${response.data.id}' to monitor progress. Keep checking every few seconds until status is 'completed' to get the research results.`,
-              nextStep: `Call deep_researcher_check with taskId: "${response.data.id}"`
+              outputSchema: responseData.outputSchema,
+              message: `Deep research task started successfully with ${researchRequest.model} model. IMMEDIATELY use deep_researcher_check with task ID '${responseData.id}' to monitor progress. Keep checking every few seconds until status is 'completed' to get the research results.`,
+              nextStep: `Call deep_researcher_check with taskId: "${responseData.id}"`
             }, null, 2)
           }]
         };

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://deno.land/x/deno/cli/schemas/config-file.v1.json",
+  "compilerOptions": {
+    "strict": true,
+    "allowJs": true,
+    "lib": ["deno.window", "dom", "dom.iterable"]
+  },
+  "imports": {
+    "@modelcontextprotocol/sdk/": "npm:@modelcontextprotocol/sdk@^1.12.1/",
+    "zod": "npm:zod@^3.22.4",
+    "axios": "npm:axios@^1.7.8"
+  },
+  "tasks": {
+    "dev": "deno run --allow-net --allow-env --allow-read --watch src/main_deno.ts",
+    "start": "deno run --allow-net --allow-env --allow-read src/main_deno.ts",
+    "check": "deno check src/main_deno.ts"
+  },
+  "deploy": {
+    "project": "exa-mcp-server",
+    "entrypoint": "src/main_deno.ts"
+  }
+}
