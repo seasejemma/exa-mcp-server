@@ -49,6 +49,7 @@ jobs:
           echo "Testing MCP initialize..."
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ env.DEPLOY_URL }}/mcp" \
             -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
             -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
             -d '{
               "jsonrpc": "2.0",
@@ -98,6 +99,7 @@ jobs:
           # First, we need to initialize a new session and get the session ID from headers
           INIT_RESPONSE=$(curl -s -i -X POST "${{ env.DEPLOY_URL }}/mcp" \
             -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
             -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
             -d '{
               "jsonrpc": "2.0",
@@ -122,6 +124,7 @@ jobs:
           # Now call tools/list with the session ID
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ env.DEPLOY_URL }}/mcp" \
             -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
             -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
             -H "Mcp-Session-Id: $SESSION_ID" \
             -d '{
@@ -164,6 +167,7 @@ jobs:
           # Initialize session
           INIT_RESPONSE=$(curl -s -i -X POST "${{ env.DEPLOY_URL }}/mcp" \
             -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
             -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
             -d '{
               "jsonrpc": "2.0",
@@ -186,6 +190,7 @@ jobs:
           # Call web_search_exa with a simple query
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ env.DEPLOY_URL }}/mcp" \
             -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
             -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
             -H "Mcp-Session-Id: $SESSION_ID" \
             -d '{
