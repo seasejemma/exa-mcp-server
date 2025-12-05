@@ -8,14 +8,15 @@ on:
   workflow_dispatch:  # Manual trigger for testing
 
 env:
-  DEPLOY_URL: https://exa-mcp.164136.xyz
-  # Fallback URL if custom domain fails
+  # MCP_SERVER_ENDPOINT is set via GitHub Secrets
   DEPLOY_URL_FALLBACK: https://exa-mcp-gjr3nzgq47rq.seasejemma.deno.net
 
 jobs:
   health-check:
     name: Health Check & MCP Tests
     runs-on: ubuntu-latest
+    env:
+      DEPLOY_URL: ${{ secrets.MCP_SERVER_ENDPOINT }}
     # Wait for Deno Deploy to complete (usually takes 30-60 seconds)
     # We add a delay at the start of the job
 
