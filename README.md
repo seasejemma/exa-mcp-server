@@ -273,6 +273,115 @@ npx exa-mcp-server tools=web_search_exa
 npx exa-mcp-server tools=web_search_exa,deep_search_exa,get_code_context_exa,crawling_exa,company_research_exa,linkedin_search_exa,deep_researcher_start,deep_researcher_check
 ```
 
+## Self-Hosted Deployment with Multi-Token Authentication 🔐
+
+When self-hosting the Exa MCP Server (e.g., on Deno Deploy), you can configure multi-token authentication with user allocation, role-based access, and expiry control.
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `MCP_AUTH_TOKENS` | Multi-token configuration (recommended) |
+| `MCP_AUTH_TOKEN` | Single admin token (backward compatible) |
+| `EXA_API_KEYS` | Comma-separated Exa API keys for pool mode |
+| `ENABLED_TOOLS` | Comma-separated list of tools to enable |
+
+### Multi-Token Configuration
+
+Configure multiple tokens using `MCP_AUTH_TOKENS`:
+
+```bash
+# Format: token:userId:role:expiry (userId, role, expiry are optional)
+MCP_AUTH_TOKENS="token1:alice:admin:2025-12-31,token2:bob:user,token3:charlie"
+```
+
+**Token Format:** `token:userId:role:expiry`
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `token` | Yes | The authentication token |
+| `userId` | No | User identifier for tracking |
+| `role` | No | `admin` or `user` (default: `user`) |
+| `expiry` | No | ISO 8601 date (e.g., `2025-12-31`) |
+
+**Examples:**
+
+```bash
+# Admin token with user and expiry
+"abc123:alice:admin:2025-12-31"
+
+# User token (default role) with no expiry
+"xyz789:bob:user"
+
+# Simple user token (just token and userId)
+"def456:charlie"
+
+# Anonymous user token (no user, no role, no expiry)
+"simple_token"
+```
+
+### Roles
+
+| Role | MCP Endpoints (`/mcp`) | Admin Endpoints (`/admin/*`) |
+|------|------------------------|------------------------------|
+| `admin` | ✅ Allowed | ✅ Allowed |
+| `user` | ✅ Allowed | ❌ Forbidden |
+
+### Endpoints
+
+| Endpoint | Method | Auth Required | Description |
+|----------|--------|---------------|-------------|
+| `/` or `/health` | GET | No | Health check |
+| `/mcp` | POST/GET/DELETE | Yes (any valid token) | MCP protocol |
+| `/admin/tokens` | GET | Yes (admin token only) | Token statistics |
+
+### Token Features
+
+- **User Allocation**: Associate tokens with user identifiers for tracking
+- **Role-Based Access**: Admin tokens can access `/admin/*` endpoints
+- **Expiry Control**: Tokens can have optional expiration dates (ISO 8601 format)
+- **Usage Tracking**: Track token usage counts and last used timestamps
+- **Deno KV Persistence**: Token state persists across server restarts
+
+### Working Modes
+
+1. **Pool Mode** (MCP_AUTH_TOKEN(S) set):
+   - Clients authenticate with bearer tokens
+   - Server uses shared `EXA_API_KEYS` pool
+   - Usage tracking and expiry enforcement
+
+2. **Passthrough Mode** (no auth configured):
+   - No authentication required
+   - Clients provide their own Exa API key via query param or header
+
+### Example Deployment
+
+```bash
+# Deno Deploy environment variables
+EXA_API_KEYS=key1,key2,key3
+MCP_AUTH_TOKENS=admin-token:admin:admin:2026-01-01,user-token-1:alice:user,user-token-2:bob:user:2025-12-31
+ENABLED_TOOLS=web_search_exa,get_code_context_exa,crawling_exa
+```
+
+### Client Usage
+
+```bash
+# Authenticate with any valid token for MCP endpoints
+curl -X POST "https://your-server.deno.dev/mcp" \
+  -H "Authorization: Bearer user-token-1" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"initialize",...}'
+
+# Check token stats (requires ADMIN token)
+curl "https://your-server.deno.dev/admin/tokens" \
+  -H "Authorization: Bearer admin-token"
+
+# User tokens cannot access admin endpoints (returns 403)
+curl "https://your-server.deno.dev/admin/tokens" \
+  -H "Authorization: Bearer user-token-1"
+# Response: {"error": {"code": -32001, "message": "Forbidden: Admin token required"}}
+```
+
 ---
 
 Built with ❤️ by team Exa

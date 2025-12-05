@@ -12,7 +12,18 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { toFetchResponse, toReqRes } from "fetch-to-node";
-import { validateAuthToken, createUnauthorizedResponse, isAuthRequired } from "./utils/authMiddleware.ts";
+import { 
+  validateAuthToken, 
+  validateAuthTokenWithDetails,
+  createUnauthorizedResponse, 
+  createForbiddenResponse,
+  isAuthRequired,
+  initializeAuth,
+  recordTokenUsage,
+  getTokenStats,
+  listTokens,
+  isAdminToken
+} from "./utils/authMiddleware.ts";
 import { getApiKeyManager } from "./utils/apiKeyManager.ts";
 import { log, logInfo, logError, logDebug } from "./utils/logger.ts";
 
@@ -231,8 +242,8 @@ function createServer(): McpServer {
  * Handle incoming HTTP requests
  * 
  * Two working modes:
- * - Pool Mode: MCP_AUTH_TOKEN set → auth required, uses EXA_API_KEYS
- * - Passthrough Mode: MCP_AUTH_TOKEN not set → no auth, uses client key
+ * - Pool Mode: MCP_AUTH_TOKEN(S) set → auth required, uses EXA_API_KEYS
+ * - Passthrough Mode: No auth configured → no auth, uses client key
  */
 async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -254,19 +265,97 @@ async function handleRequest(req: Request): Promise<Response> {
     }
   }
 
+  // User self-service endpoint - any valid token can query their own usage
+  if (url.pathname === '/mcp/usage' && req.method === 'GET') {
+    const authHeader = req.headers.get('Authorization');
+    const validation = validateAuthTokenWithDetails(authHeader);
+    
+    if (!validation.valid) {
+      const unauthorized = createUnauthorizedResponse(validation.reason);
+      return new Response(JSON.stringify(unauthorized.body), {
+        status: unauthorized.status,
+        headers: unauthorized.headers,
+      });
+    }
+
+    const tokenInfo = validation.token!;
+    return new Response(JSON.stringify({
+      userId: tokenInfo.userId,
+      role: tokenInfo.role,
+      expiresAt: tokenInfo.expiresAt,
+      isExpired: tokenInfo.expiresAt ? new Date() > tokenInfo.expiresAt : false,
+      usageCount: tokenInfo.usageCount,
+      lastUsedAt: tokenInfo.lastUsedAt,
+    }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Token stats endpoint (requires admin token)
+  if (url.pathname === '/admin/tokens' && req.method === 'GET') {
+    const authHeader = req.headers.get('Authorization');
+    
+    // First validate the token
+    const validation = validateAuthTokenWithDetails(authHeader);
+    if (!validation.valid) {
+      const unauthorized = createUnauthorizedResponse(validation.reason);
+      return new Response(JSON.stringify(unauthorized.body), {
+        status: unauthorized.status,
+        headers: unauthorized.headers,
+      });
+    }
+    
+    // Then check if it's an admin token
+    if (!isAdminToken(authHeader)) {
+      const forbidden = createForbiddenResponse('Forbidden: Admin token required');
+      return new Response(JSON.stringify(forbidden.body), {
+        status: forbidden.status,
+        headers: forbidden.headers,
+      });
+    }
+    
+    return new Response(JSON.stringify({
+      stats: getTokenStats(),
+      tokens: listTokens(),
+    }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
   // MCP endpoint
   if (url.pathname === '/mcp' || url.pathname === '/') {
     // Mode-specific authentication
     if (poolMode) {
-      // Pool Mode: require MCP auth token
+      // Pool Mode: require MCP auth token with enhanced validation
       const authHeader = req.headers.get('Authorization');
-      if (!validateAuthToken(authHeader)) {
-        const unauthorized = createUnauthorizedResponse();
+      const validation = validateAuthTokenWithDetails(authHeader);
+      
+      if (!validation.valid) {
+        // Differentiate between expired/disabled tokens and invalid tokens
+        if (validation.reason === 'Token has expired' || validation.reason === 'Token is disabled') {
+          const forbidden = createForbiddenResponse(validation.reason);
+          return new Response(JSON.stringify(forbidden.body), {
+            status: forbidden.status,
+            headers: forbidden.headers,
+          });
+        }
+        
+        const unauthorized = createUnauthorizedResponse(validation.reason);
         return new Response(JSON.stringify(unauthorized.body), {
           status: unauthorized.status,
           headers: unauthorized.headers,
         });
       }
+
+      // Log user info if available
+      if (debug && validation.token?.userId) {
+        logDebug(`Request from user: ${validation.token.userId}`);
+      }
+
+      // Record token usage asynchronously (don't block the request)
+      recordTokenUsage(authHeader).catch(err => {
+        logError(`Failed to record token usage: ${err}`);
+      });
     } else {
       // Passthrough Mode: require client-provided API key
       const clientKey = extractPassthroughKey(req);
@@ -426,12 +515,21 @@ async function handleMcpDelete(req: Request, debug: boolean): Promise<Response> 
  * Main entry point
  */
 async function main() {
+  // Initialize auth middleware (token manager)
+  await initializeAuth();
+  
   // Initialize API key manager
   const keyManager = getApiKeyManager();
   await keyManager.initialize();
 
   const status = keyManager.getStatus();
   logInfo(`API Key Manager: ${status.total} key(s), ${status.active} active`);
+  
+  // Log token stats
+  const tokenStats = getTokenStats();
+  if (tokenStats.totalTokens > 0) {
+    logInfo(`Token Manager: ${tokenStats.totalTokens} token(s), ${tokenStats.activeTokens} active, ${tokenStats.expiredTokens} expired`);
+  }
 
   const port = parseInt(Deno.env.get('PORT') || '8000', 10);
   const hostname = Deno.env.get('HOSTNAME') || '0.0.0.0';
