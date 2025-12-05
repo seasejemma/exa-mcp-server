@@ -8,7 +8,8 @@
   "imports": {
     "@modelcontextprotocol/sdk/": "npm:@modelcontextprotocol/sdk@^1.12.1/",
     "zod": "npm:zod@^3.22.4",
-    "axios": "npm:axios@^1.7.8"
+    "axios": "npm:axios@^1.7.8",
+    "fetch-to-node": "npm:fetch-to-node@^1.3.1"
   },
   "tasks": {
     "dev": "deno run --allow-net --allow-env --allow-read --watch src/main_deno.ts",

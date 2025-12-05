@@ -10,6 +10,8 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { toFetchResponse, toReqRes } from "fetch-to-node";
 import { validateAuthToken, createUnauthorizedResponse, isAuthRequired } from "./utils/authMiddleware.ts";
 import { getApiKeyManager } from "./utils/apiKeyManager.ts";
 import { log } from "./utils/logger.ts";
@@ -301,72 +303,16 @@ async function handleRequest(req: Request): Promise<Response> {
 }
 
 /**
- * Create a Node.js-style IncomingMessage-like object from a Deno Request
+ * Handle MCP request using fetch-to-node conversion
  */
-function createNodeStyleRequest(req: Request, body: string): any {
-  const url = new URL(req.url);
-  const headers: Record<string, string> = {};
-  req.headers.forEach((value, key) => {
-    headers[key.toLowerCase()] = value;
-  });
-
-  return {
-    method: req.method,
-    url: url.pathname + url.search,
-    headers,
-    // The body is passed separately to handleRequest
-  };
-}
-
-/**
- * Create a Node.js-style ServerResponse-like object that collects the response
- */
-function createNodeStyleResponse(): { 
-  res: any; 
-  getResponse: () => { status: number; headers: Record<string, string>; body: string } 
-} {
-  let statusCode = 200;
-  const headers: Record<string, string> = {};
-  let body = '';
-  let headersSent = false;
-
-  const res = {
-    statusCode,
-    setHeader(name: string, value: string) {
-      headers[name.toLowerCase()] = value;
-    },
-    getHeader(name: string) {
-      return headers[name.toLowerCase()];
-    },
-    writeHead(status: number, responseHeaders?: Record<string, string>) {
-      statusCode = status;
-      if (responseHeaders) {
-        Object.entries(responseHeaders).forEach(([key, value]) => {
-          headers[key.toLowerCase()] = value;
-        });
-      }
-      headersSent = true;
-    },
-    write(chunk: string | Buffer) {
-      body += typeof chunk === 'string' ? chunk : chunk.toString();
-      return true;
-    },
-    end(data?: string | Buffer) {
-      if (data) {
-        body += typeof data === 'string' ? data : data.toString();
-      }
-    },
-    on(_event: string, _listener: () => void) {
-      // No-op for Deno
-      return res;
-    },
-    headersSent,
-  };
-
-  return {
-    res,
-    getResponse: () => ({ status: statusCode, headers, body }),
-  };
+async function handleMCPRequest(
+  transport: StreamableHTTPServerTransport,
+  request: Request,
+): Promise<Response> {
+  const { req, res } = toReqRes(request);
+  await transport.handleRequest(req, res);
+  const response = await toFetchResponse(res);
+  return response;
 }
 
 /**
@@ -377,16 +323,35 @@ async function handleMcpPost(req: Request, debug: boolean): Promise<Response> {
     const sessionId = req.headers.get('mcp-session-id');
     let transport: StreamableHTTPServerTransport;
 
+    // Clone the request for body reading while keeping original for handleRequest
+    const originalRequest = req.clone();
     const body = await req.text();
-    const parsedBody = body ? JSON.parse(body) : {};
+
+    // Check if this is an initialize request
+    let parsedBody: any = null;
+    try {
+      parsedBody = body ? JSON.parse(body) : {};
+    } catch {
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        error: { code: -32700, message: 'Parse error' },
+        id: null,
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    const isInit = isInitializeRequest(parsedBody);
 
     if (sessionId && sessions.has(sessionId)) {
       transport = sessions.get(sessionId)!;
-    } else {
-      // Create new session
+    } else if (isInit) {
+      // Create new session for initialize request
       const server = createServer();
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
+        enableJsonResponse: true,
         onsessioninitialized: (id: string) => {
           sessions.set(id, transport);
           if (debug) log(`[Deno] Session initialized: ${id}`);
@@ -394,20 +359,20 @@ async function handleMcpPost(req: Request, debug: boolean): Promise<Response> {
       });
 
       await server.server.connect(transport);
+    } else {
+      // No session and not an initialize request
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        error: { code: -32600, message: 'Invalid request: session not found' },
+        id: null,
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
-    // Create Node.js-style req/res objects
-    const nodeReq = createNodeStyleRequest(req, body);
-    const { res: nodeRes, getResponse } = createNodeStyleResponse();
-
-    // Process the request with Node-style objects
-    await transport.handleRequest(nodeReq, nodeRes, parsedBody);
-
-    const response = getResponse();
-    return new Response(response.body || null, {
-      status: response.status,
-      headers: response.headers,
-    });
+    // Use fetch-to-node to handle the request
+    return await handleMCPRequest(transport, originalRequest);
   } catch (error) {
     log(`[Deno] Error handling POST: ${error}`);
     return new Response(JSON.stringify({
@@ -434,16 +399,7 @@ async function handleMcpGet(req: Request, debug: boolean): Promise<Response> {
   const transport = sessions.get(sessionId)!;
   
   try {
-    const nodeReq = createNodeStyleRequest(req, '');
-    const { res: nodeRes, getResponse } = createNodeStyleResponse();
-    
-    await transport.handleRequest(nodeReq, nodeRes);
-    
-    const response = getResponse();
-    return new Response(response.body || null, {
-      status: response.status,
-      headers: response.headers,
-    });
+    return await handleMCPRequest(transport, req);
   } catch (error) {
     log(`[Deno] Error handling GET: ${error}`);
     return new Response('Internal error', { status: 500 });
