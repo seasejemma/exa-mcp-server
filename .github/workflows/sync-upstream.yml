@@ -1,0 +1,42 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Daily at midnight UTC
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: upstream-main
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync from upstream
+        run: |
+          git remote add upstream https://github.com/exa-labs/exa-mcp-server.git || true
+          git fetch upstream main
+          git merge upstream/main --no-edit || echo "No changes or conflict"
+          git push origin upstream-main
+
+      - name: Create PR if needed
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: sync/upstream-updates
+          base: feat/rotation
+          title: "chore: sync upstream changes"
+          body: |
+            Automated PR to sync changes from upstream exa-labs/exa-mcp-server.
+            
+            Please review and merge if tests pass.
+          labels: upstream-sync
+          delete-branch: true

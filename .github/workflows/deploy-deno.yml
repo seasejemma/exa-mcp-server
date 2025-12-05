@@ -1,4 +1,4 @@
-name: Deploy to Deno Deploy
+name: Deploy to Deno Deploy (EA)
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      id-token: write  # Needed for auth with Deno Deploy
+      id-token: write  # Needed for OIDC auth with Deno Deploy
       contents: read   # Needed to clone the repository
 
     steps:
@@ -32,13 +32,8 @@ jobs:
         run: deno check src/main_deno.ts
         continue-on-error: true  # Don't fail on type errors during initial setup
 
-      - name: Deploy to Deno Deploy
-        uses: denoland/deployctl@v1
-        with:
-          project: "exa-mcp-server"
-          entrypoint: "src/main_deno.ts"
-          root: "."
+      - name: Deploy to Deno Deploy (EA)
+        run: deno deploy --org seasejemma --app exa-mcp --prod
         env:
-          EXA_API_KEYS: ${{ secrets.EXA_API_KEYS }}
-          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
-          DEBUG: "false"
+          DENO_DEPLOY_TOKEN: ${{ secrets.DENO_DEPLOY_TOKEN }}
+          # Runtime env vars (EXA_API_KEYS, MCP_AUTH_TOKEN) are set in Deno Deploy console
