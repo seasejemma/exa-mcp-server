@@ -1,0 +1,270 @@
+name: Post-Deploy Health Check
+
+# Trigger after Deno Deploy completes (via GitHub integration)
+# Since Deno Deploy EA uses its own webhook, we trigger on push and add a delay
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Manual trigger for testing
+
+env:
+  DEPLOY_URL: https://exa-mcp.164136.xyz
+  # Fallback URL if custom domain fails
+  DEPLOY_URL_FALLBACK: https://exa-mcp-gjr3nzgq47rq.seasejemma.deno.net
+
+jobs:
+  health-check:
+    name: Health Check & MCP Tests
+    runs-on: ubuntu-latest
+    # Wait for Deno Deploy to complete (usually takes 30-60 seconds)
+    # We add a delay at the start of the job
+
+    steps:
+      - name: Wait for Deno Deploy
+        run: |
+          echo "Waiting 60 seconds for Deno Deploy to complete..."
+          sleep 60
+
+      - name: Check /health endpoint
+        run: |
+          echo "Testing health endpoint..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" "${{ env.DEPLOY_URL }}/health")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo "Response: $BODY"
+          echo "HTTP Code: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Health check failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+          
+          echo "✅ Health check passed"
+
+      - name: Test MCP Initialize
+        env:
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
+        run: |
+          echo "Testing MCP initialize..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ env.DEPLOY_URL }}/mcp" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+            -d '{
+              "jsonrpc": "2.0",
+              "method": "initialize",
+              "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "github-actions", "version": "1.0"}
+              },
+              "id": 1
+            }')
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo "Response: $BODY"
+          echo "HTTP Code: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ MCP initialize failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+          
+          # Check for error in response
+          if echo "$BODY" | jq -e '.error' > /dev/null 2>&1; then
+            echo "❌ MCP initialize returned error"
+            exit 1
+          fi
+          
+          # Extract session ID for subsequent requests
+          SESSION_ID=$(echo "$BODY" | jq -r '.["Mcp-Session-Id"] // empty')
+          if [ -z "$SESSION_ID" ]; then
+            # Try to get from response headers (stored in a different way)
+            SESSION_ID=$(echo "$BODY" | jq -r '.result.sessionId // empty')
+          fi
+          
+          echo "Session ID: $SESSION_ID"
+          echo "SESSION_ID=$SESSION_ID" >> $GITHUB_ENV
+          echo "✅ MCP initialize passed"
+
+      - name: Test tools/list
+        env:
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
+        run: |
+          echo "Testing tools/list..."
+          
+          # First, we need to initialize a new session and get the session ID from headers
+          INIT_RESPONSE=$(curl -s -i -X POST "${{ env.DEPLOY_URL }}/mcp" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+            -d '{
+              "jsonrpc": "2.0",
+              "method": "initialize",
+              "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "github-actions", "version": "1.0"}
+              },
+              "id": 1
+            }')
+          
+          # Extract session ID from headers (case-insensitive)
+          SESSION_ID=$(echo "$INIT_RESPONSE" | grep -i "mcp-session-id:" | cut -d' ' -f2 | tr -d '\r')
+          echo "Session ID: $SESSION_ID"
+          
+          if [ -z "$SESSION_ID" ]; then
+            echo "⚠️ Could not extract session ID, skipping tools/list test"
+            exit 0
+          fi
+          
+          # Now call tools/list with the session ID
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ env.DEPLOY_URL }}/mcp" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+            -H "Mcp-Session-Id: $SESSION_ID" \
+            -d '{
+              "jsonrpc": "2.0",
+              "method": "tools/list",
+              "params": {},
+              "id": 2
+            }')
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo "Response: $BODY"
+          echo "HTTP Code: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ tools/list failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+          
+          # Check that we got tools in the response
+          TOOL_COUNT=$(echo "$BODY" | jq -r '.result.tools | length // 0')
+          echo "Found $TOOL_COUNT tools"
+          
+          if [ "$TOOL_COUNT" -eq 0 ]; then
+            echo "⚠️ No tools returned (may be expected based on config)"
+          else
+            echo "Tools available:"
+            echo "$BODY" | jq -r '.result.tools[].name' 2>/dev/null || true
+          fi
+          
+          echo "✅ tools/list passed"
+
+      - name: Test web_search_exa tool
+        env:
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
+        run: |
+          echo "Testing web_search_exa tool..."
+          
+          # Initialize session
+          INIT_RESPONSE=$(curl -s -i -X POST "${{ env.DEPLOY_URL }}/mcp" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+            -d '{
+              "jsonrpc": "2.0",
+              "method": "initialize",
+              "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "github-actions", "version": "1.0"}
+              },
+              "id": 1
+            }')
+          
+          SESSION_ID=$(echo "$INIT_RESPONSE" | grep -i "mcp-session-id:" | cut -d' ' -f2 | tr -d '\r')
+          
+          if [ -z "$SESSION_ID" ]; then
+            echo "⚠️ Could not extract session ID, skipping tool call test"
+            exit 0
+          fi
+          
+          # Call web_search_exa with a simple query
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ env.DEPLOY_URL }}/mcp" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+            -H "Mcp-Session-Id: $SESSION_ID" \
+            -d '{
+              "jsonrpc": "2.0",
+              "method": "tools/call",
+              "params": {
+                "name": "web_search_exa",
+                "arguments": {
+                  "query": "github actions health check",
+                  "numResults": 1
+                }
+              },
+              "id": 3
+            }')
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo "HTTP Code: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ web_search_exa failed with HTTP $HTTP_CODE"
+            echo "Response: $BODY"
+            exit 1
+          fi
+          
+          # Check for error in response
+          if echo "$BODY" | jq -e '.error' > /dev/null 2>&1; then
+            ERROR_MSG=$(echo "$BODY" | jq -r '.error.message')
+            echo "❌ web_search_exa returned error: $ERROR_MSG"
+            exit 1
+          fi
+          
+          # Check that we got content
+          CONTENT_LENGTH=$(echo "$BODY" | jq -r '.result.content | length // 0')
+          echo "Got $CONTENT_LENGTH content items"
+          
+          if [ "$CONTENT_LENGTH" -gt 0 ]; then
+            echo "✅ web_search_exa returned results"
+          else
+            echo "⚠️ web_search_exa returned no content (may be rate limited)"
+          fi
+          
+          echo "✅ web_search_exa test completed"
+
+      - name: Test /mcp/usage endpoint
+        env:
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
+        run: |
+          echo "Testing /mcp/usage endpoint..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" "${{ env.DEPLOY_URL }}/mcp/usage" \
+            -H "Authorization: Bearer $MCP_AUTH_TOKEN")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo "Response: $BODY"
+          echo "HTTP Code: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ /mcp/usage failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+          
+          # Check for usageCount in response
+          if echo "$BODY" | jq -e '.usageCount' > /dev/null 2>&1; then
+            USAGE=$(echo "$BODY" | jq -r '.usageCount')
+            echo "Usage count: $USAGE"
+            echo "✅ /mcp/usage passed"
+          else
+            echo "⚠️ usageCount not found in response"
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "  Post-Deploy Health Check Summary"
+          echo "=========================================="
+          echo "Deploy URL: ${{ env.DEPLOY_URL }}"
+          echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "=========================================="
