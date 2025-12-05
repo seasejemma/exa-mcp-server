@@ -1,6 +1,6 @@
 {
   "$schema": "https://deno.land/x/deno/cli/schemas/config-file.v1.json",
-  "unstable": ["sloppy-imports"],
+  "unstable": ["sloppy-imports", "kv"],
   "compilerOptions": {
     "strict": true,
     "lib": ["deno.window", "dom", "dom.iterable"]
