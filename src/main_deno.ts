@@ -58,6 +58,10 @@ const availableTools = {
 };
 
 // Session storage for StreamableHTTP
+// Note: In serverless/edge environments like Deno Deploy, this map is NOT persistent
+// across requests (each request may hit a different isolate). We handle this by:
+// 1. Always creating a fresh server/transport for each request
+// 2. Not requiring session IDs (stateless mode per MCP spec)
 const sessions = new Map<string, StreamableHTTPServerTransport>();
 
 /**
@@ -406,6 +410,13 @@ async function handleMCPRequest(
 
 /**
  * Handle MCP POST requests (new messages)
+ * 
+ * Stateless Mode: In Deno Deploy (serverless/edge), each request may hit a 
+ * different isolate, so we cannot rely on in-memory session storage.
+ * We create a fresh server/transport for each request.
+ * 
+ * Per MCP spec, session management is OPTIONAL. We operate statelessly
+ * which is perfectly valid for tools that don't require multi-turn context.
  */
 async function handleMcpPost(req: Request, debug: boolean): Promise<Response> {
   try {
@@ -433,31 +444,46 @@ async function handleMcpPost(req: Request, debug: boolean): Promise<Response> {
 
     const isInit = isInitializeRequest(parsedBody);
 
+    // Check if we have an existing session in memory (same isolate)
     if (sessionId && sessions.has(sessionId)) {
       transport = sessions.get(sessionId)!;
-    } else if (isInit) {
-      // Create new session for initialize request
+      if (debug) logDebug(`Reusing existing session: ${sessionId}`);
+    } else {
+      // Create a new server and transport for this request
+      // This handles both:
+      // 1. Initialize requests (new session)
+      // 2. Requests with session ID from different isolate (recreate session)
+      // 3. Stateless requests (no session ID, non-init)
       const server = createServer();
-      transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-        enableJsonResponse: true,
-        onsessioninitialized: (id: string) => {
-          sessions.set(id, transport);
-          if (debug) logDebug(`Session initialized: ${id}`);
-        },
-      });
+      
+      if (isInit) {
+        // New session initialization - generate session ID
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => crypto.randomUUID(),
+          enableJsonResponse: true,
+          onsessioninitialized: (id: string) => {
+            sessions.set(id, transport);
+            if (debug) logDebug(`Session initialized: ${id}`);
+          },
+        });
+      } else {
+        // Non-init request: operate statelessly
+        // Create transport without session tracking (stateless mode)
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined, // Don't generate new session ID
+          enableJsonResponse: true,
+        });
+        
+        if (debug) {
+          if (sessionId) {
+            logDebug(`Session ${sessionId} not found in this isolate - handling statelessly`);
+          } else {
+            logDebug(`Stateless request (no session ID)`);
+          }
+        }
+      }
 
       await server.server.connect(transport);
-    } else {
-      // No session and not an initialize request
-      return new Response(JSON.stringify({
-        jsonrpc: '2.0',
-        error: { code: -32600, message: 'Invalid request: session not found' },
-        id: null,
-      }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
     }
 
     // Use fetch-to-node to handle the request
@@ -477,22 +503,42 @@ async function handleMcpPost(req: Request, debug: boolean): Promise<Response> {
 
 /**
  * Handle MCP GET requests (SSE stream)
+ * 
+ * Note: In serverless mode, GET requests for SSE streams won't work well
+ * because sessions don't persist across isolates. We return 405 to indicate
+ * SSE streams are not supported (which is valid per MCP spec).
  */
 async function handleMcpGet(req: Request, debug: boolean): Promise<Response> {
   const sessionId = req.headers.get('mcp-session-id');
   
-  if (!sessionId || !sessions.has(sessionId)) {
-    return new Response('Session not found', { status: 404 });
+  // Check if session exists in current isolate
+  if (sessionId && sessions.has(sessionId)) {
+    const transport = sessions.get(sessionId)!;
+    
+    try {
+      return await handleMCPRequest(transport, req);
+    } catch (error) {
+      logError(`Error handling GET: ${error}`);
+      return new Response('Internal error', { status: 500 });
+    }
   }
 
-  const transport = sessions.get(sessionId)!;
-  
-  try {
-    return await handleMCPRequest(transport, req);
-  } catch (error) {
-    logError(`Error handling GET: ${error}`);
-    return new Response('Internal error', { status: 500 });
+  // Per MCP spec: server MAY return 405 Method Not Allowed if it doesn't 
+  // offer SSE streams. This is appropriate for serverless environments.
+  if (debug) {
+    logDebug(`GET request rejected - SSE streams not available in serverless mode`);
   }
+  
+  return new Response(JSON.stringify({
+    error: 'SSE streams not available',
+    message: 'This server runs in stateless mode. Use POST requests for all MCP operations.',
+  }), { 
+    status: 405,
+    headers: { 
+      'Content-Type': 'application/json',
+      'Allow': 'POST, DELETE',
+    },
+  });
 }
 
 /**
