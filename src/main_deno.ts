@@ -10,19 +10,19 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { validateAuthToken, createUnauthorizedResponse, isAuthRequired } from "./utils/authMiddleware.js";
-import { getApiKeyManager } from "./utils/apiKeyManager.js";
-import { log } from "./utils/logger.js";
+import { validateAuthToken, createUnauthorizedResponse, isAuthRequired } from "./utils/authMiddleware.ts";
+import { getApiKeyManager } from "./utils/apiKeyManager.ts";
+import { log } from "./utils/logger.ts";
 
 // Import tool registration functions
-import { registerWebSearchTool } from "./tools/webSearch.js";
-import { registerDeepSearchTool } from "./tools/deepSearch.js";
-import { registerCompanyResearchTool } from "./tools/companyResearch.js";
-import { registerCrawlingTool } from "./tools/crawling.js";
-import { registerLinkedInSearchTool } from "./tools/linkedInSearch.js";
-import { registerDeepResearchStartTool } from "./tools/deepResearchStart.js";
-import { registerDeepResearchCheckTool } from "./tools/deepResearchCheck.js";
-import { registerExaCodeTool } from "./tools/exaCode.js";
+import { registerWebSearchTool } from "./tools/webSearch.ts";
+import { registerDeepSearchTool } from "./tools/deepSearch.ts";
+import { registerCompanyResearchTool } from "./tools/companyResearch.ts";
+import { registerCrawlingTool } from "./tools/crawling.ts";
+import { registerLinkedInSearchTool } from "./tools/linkedInSearch.ts";
+import { registerDeepResearchStartTool } from "./tools/deepResearchStart.ts";
+import { registerDeepResearchCheckTool } from "./tools/deepResearchCheck.ts";
+import { registerExaCodeTool } from "./tools/exaCode.ts";
 
 // Type declarations for Deno
 declare const Deno: {
