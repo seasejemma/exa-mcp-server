@@ -1,54 +1,88 @@
 name: Post-Deploy Health Check
 
-# Trigger after Deno Deploy completes (via GitHub integration)
-# Since Deno Deploy EA uses its own webhook, we trigger on push and add a delay
+# ============================================================================
+# WORKFLOW: Verify Deno Deploy deployment is healthy
+# ============================================================================
+# Triggers:
+#   - After push to main (Deno Deploy auto-deploys)
+#   - Manual dispatch for testing
+#   - Called by other workflows
+# ============================================================================
+
 on:
   push:
     branches: [main]
-  workflow_dispatch:  # Manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      deploy_url:
+        description: 'Custom deploy URL to test (optional)'
+        type: string
+        required: false
+  workflow_call:
+    inputs:
+      deploy_url:
+        description: 'Deploy URL to test'
+        type: string
+        required: false
+    secrets:
+      MCP_AUTH_TOKEN:
+        required: true
 
 jobs:
   health-check:
     name: Health Check & MCP Tests
     runs-on: ubuntu-latest
     env:
-      # Use MCP_SERVER_ENDPOINT if set, otherwise use fallback
-      DEPLOY_URL: ${{ vars.MCP_SERVER_ENDPOINT || 'https://exa-mcp.seasejemma.deno.net' }}
-    # Wait for Deno Deploy to complete (usually takes 30-60 seconds)
-    # We add a delay at the start of the job
+      DEPLOY_URL: ${{ inputs.deploy_url || vars.MCP_SERVER_ENDPOINT || 'https://exa-mcp.seasejemma.deno.net' }}
+    outputs:
+      health_status: ${{ steps.health.outputs.status }}
+      mcp_status: ${{ steps.mcp.outputs.status }}
 
     steps:
       - name: Wait for Deno Deploy
         run: |
-          echo "Waiting 60 seconds for Deno Deploy to complete..."
-          sleep 60
+          echo "⏳ Waiting 90 seconds for Deno Deploy to complete..."
+          echo "Target: $DEPLOY_URL"
+          sleep 90
 
       - name: Check /health endpoint
+        id: health
         run: |
-          echo "Testing health endpoint at $DEPLOY_URL..."
-          RESPONSE=$(curl -s -w "\n%{http_code}" "$DEPLOY_URL/health")
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
+          echo "🔍 Testing health endpoint at $DEPLOY_URL..."
           
-          echo "Response: $BODY"
-          echo "HTTP Code: $HTTP_CODE"
+          # Retry logic for cold starts
+          for i in 1 2 3; do
+            RESPONSE=$(curl -s -w "\n%{http_code}" "$DEPLOY_URL/health" --max-time 30)
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+            
+            echo "Attempt $i - HTTP: $HTTP_CODE"
+            
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "status=success" >> $GITHUB_OUTPUT
+              echo "✅ Health check passed"
+              echo "$BODY" | jq . 2>/dev/null || echo "$BODY"
+              exit 0
+            fi
+            
+            [ $i -lt 3 ] && sleep 10
+          done
           
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "❌ Health check failed with HTTP $HTTP_CODE"
-            exit 1
-          fi
-          
-          echo "✅ Health check passed"
+          echo "status=failed" >> $GITHUB_OUTPUT
+          echo "❌ Health check failed after 3 attempts"
+          exit 1
 
       - name: Test MCP Initialize
+        id: mcp
         env:
           MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
         run: |
-          echo "Testing MCP initialize..."
+          echo "🔍 Testing MCP initialize..."
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$DEPLOY_URL/mcp" \
             -H "Content-Type: application/json" \
             -H "Accept: application/json, text/event-stream" \
             -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+            --max-time 30 \
             -d '{
               "jsonrpc": "2.0",
               "method": "initialize",
@@ -67,32 +101,25 @@ jobs:
           echo "HTTP Code: $HTTP_CODE"
           
           if [ "$HTTP_CODE" != "200" ]; then
+            echo "status=failed" >> $GITHUB_OUTPUT
             echo "❌ MCP initialize failed with HTTP $HTTP_CODE"
             exit 1
           fi
           
-          # Check for error in response
           if echo "$BODY" | jq -e '.error' > /dev/null 2>&1; then
+            echo "status=failed" >> $GITHUB_OUTPUT
             echo "❌ MCP initialize returned error"
             exit 1
           fi
           
-          # Extract session ID for subsequent requests
-          SESSION_ID=$(echo "$BODY" | jq -r '.["Mcp-Session-Id"] // empty')
-          if [ -z "$SESSION_ID" ]; then
-            # Try to get from response headers (stored in a different way)
-            SESSION_ID=$(echo "$BODY" | jq -r '.result.sessionId // empty')
-          fi
-          
-          echo "Session ID: $SESSION_ID"
-          echo "SESSION_ID=$SESSION_ID" >> $GITHUB_ENV
+          echo "status=success" >> $GITHUB_OUTPUT
           echo "✅ MCP initialize passed"
 
       - name: Test tools/list
         env:
           MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
         run: |
-          echo "Testing tools/list..."
+          echo "🔍 Testing tools/list..."
           
           # First, we need to initialize a new session and get the session ID from headers
           INIT_RESPONSE=$(curl -s -i -X POST "$DEPLOY_URL/mcp" \

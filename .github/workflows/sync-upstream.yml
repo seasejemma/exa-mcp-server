@@ -1,42 +1,226 @@
 name: Sync Upstream
 
+# ============================================================================
+# WORKFLOW: Upstream Sync → Customization Rebase → PR to Main
+# ============================================================================
+# Branch Strategy:
+#   - upstream:     Mirrors exa-labs/exa-mcp-server main (no customizations)
+#   - custom:       Your customizations rebased on upstream
+#   - main:         Production branch (Deno Deploy watches this)
+#
+# Flow:
+#   1. upstream branch pulls from exa-labs/exa-mcp-server
+#   2. custom branch rebases onto updated upstream
+#   3. PR created: custom → main
+#   4. On merge: Deno Deploy auto-redeploys
+#   5. health-check.yml verifies deployment
+# ============================================================================
+
 on:
   schedule:
-    - cron: '0 0 * * *'  # Daily at midnight UTC
-  workflow_dispatch:  # Manual trigger
+    - cron: '0 6 * * *'  # Daily at 6 AM UTC
+  workflow_dispatch:
+    inputs:
+      force_sync:
+        description: 'Force sync even if no upstream changes'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
-  sync:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 1: Sync upstream branch with exa-labs/exa-mcp-server
+  # ─────────────────────────────────────────────────────────────────────────
+  sync-upstream:
+    name: "Step 1: Sync upstream branch"
     runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.check.outputs.has_changes }}
+      upstream_sha: ${{ steps.check.outputs.upstream_sha }}
     steps:
-      - name: Checkout
+      - name: Checkout upstream branch
         uses: actions/checkout@v4
         with:
-          ref: upstream-main
+          ref: upstream
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Sync from upstream
+      - name: Add upstream remote
         run: |
           git remote add upstream https://github.com/exa-labs/exa-mcp-server.git || true
-          git fetch upstream main
-          git merge upstream/main --no-edit || echo "No changes or conflict"
-          git push origin upstream-main
+          git fetch upstream main --tags
 
-      - name: Create PR if needed
-        uses: peter-evans/create-pull-request@v5
+      - name: Check for changes
+        id: check
+        run: |
+          LOCAL_SHA=$(git rev-parse HEAD)
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          
+          echo "Local upstream branch: $LOCAL_SHA"
+          echo "Remote upstream/main:  $UPSTREAM_SHA"
+          echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+          
+          if [ "$LOCAL_SHA" = "$UPSTREAM_SHA" ]; then
+            echo "✅ Already up to date with upstream"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "🔄 Upstream has new changes"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fast-forward to upstream
+        if: steps.check.outputs.has_changes == 'true' || inputs.force_sync
+        run: |
+          # Reset to upstream/main (clean mirror)
+          git reset --hard upstream/main
+          git push origin upstream --force-with-lease
+          echo "✅ upstream branch synced to ${{ steps.check.outputs.upstream_sha }}"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 2: Rebase customizations onto updated upstream
+  # ─────────────────────────────────────────────────────────────────────────
+  rebase-custom:
+    name: "Step 2: Rebase custom branch"
+    needs: sync-upstream
+    if: needs.sync-upstream.outputs.has_changes == 'true' || inputs.force_sync
+    runs-on: ubuntu-latest
+    outputs:
+      rebase_success: ${{ steps.rebase.outputs.success }}
+      conflict_files: ${{ steps.rebase.outputs.conflict_files }}
+    steps:
+      - name: Checkout custom branch
+        uses: actions/checkout@v4
+        with:
+          ref: custom
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch all branches
+        run: |
+          git fetch origin upstream:upstream
+          git fetch origin main:main
+
+      - name: Attempt rebase onto upstream
+        id: rebase
+        run: |
+          echo "🔄 Rebasing custom onto upstream..."
+          
+          # Try rebase
+          if git rebase upstream; then
+            echo "✅ Rebase successful"
+            echo "success=true" >> $GITHUB_OUTPUT
+            git push origin custom --force-with-lease
+          else
+            echo "❌ Rebase failed - conflicts detected"
+            echo "success=false" >> $GITHUB_OUTPUT
+            
+            # Capture conflict files
+            CONFLICTS=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
+            echo "conflict_files=$CONFLICTS" >> $GITHUB_OUTPUT
+            
+            # Abort rebase for clean state
+            git rebase --abort
+            exit 1
+          fi
+
+      - name: Create conflict issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const conflicts = '${{ steps.rebase.outputs.conflict_files }}' || 'unknown files';
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🚨 Upstream sync conflict - manual resolution needed',
+              body: `## Rebase Conflict Detected
+              
+              The automated rebase of \`custom\` onto \`upstream\` failed due to conflicts.
+              
+              **Conflicting files:** \`${conflicts}\`
+              
+              ### Manual Resolution Steps:
+              \`\`\`bash
+              git fetch origin
+              git checkout custom
+              git rebase origin/upstream
+              # Resolve conflicts in your editor
+              git add .
+              git rebase --continue
+              git push origin custom --force-with-lease
+              \`\`\`
+              
+              **Upstream SHA:** ${{ needs.sync-upstream.outputs.upstream_sha }}
+              `,
+              labels: ['upstream-sync', 'conflict', 'needs-attention']
+            });
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 3: Create PR from custom → main
+  # ─────────────────────────────────────────────────────────────────────────
+  create-pr:
+    name: "Step 3: Create PR to main"
+    needs: [sync-upstream, rebase-custom]
+    if: needs.rebase-custom.outputs.rebase_success == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: custom
+          fetch-depth: 0
+
+      - name: Check if PR needed
+        id: diff
+        run: |
+          git fetch origin main:main
+          DIFF_COUNT=$(git rev-list --count main..custom)
+          echo "commits_ahead=$DIFF_COUNT" >> $GITHUB_OUTPUT
+          
+          if [ "$DIFF_COUNT" -gt 0 ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.diff.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          branch: sync/upstream-updates
-          base: feat/rotation
-          title: "chore: sync upstream changes"
+          branch: custom
+          base: main
+          title: "🔄 Sync: upstream changes + customizations"
           body: |
-            Automated PR to sync changes from upstream exa-labs/exa-mcp-server.
+            ## Automated Upstream Sync
             
-            Please review and merge if tests pass.
-          labels: upstream-sync
-          delete-branch: true
+            This PR includes:
+            - ✅ Latest changes from [exa-labs/exa-mcp-server](https://github.com/exa-labs/exa-mcp-server)
+            - ✅ Your customizations rebased on top
+            
+            **Upstream SHA:** `${{ needs.sync-upstream.outputs.upstream_sha }}`
+            **Commits ahead of main:** ${{ steps.diff.outputs.commits_ahead }}
+            
+            ### After Merge
+            1. Deno Deploy will auto-redeploy from `main`
+            2. Health check workflow will verify deployment
+            
+            ---
+            _Auto-generated by sync-upstream workflow_
+          labels: |
+            upstream-sync
+            automated
+          draft: false
