@@ -2,9 +2,9 @@ name: Deploy to Deno Deploy (EA)
 
 on:
   push:
-    branches: [feat/rotation]  # Our working branch (default)
+    branches: [main]
   pull_request:
-    branches: [feat/rotation]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
