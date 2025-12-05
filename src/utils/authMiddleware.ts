@@ -67,7 +67,10 @@ function constantTimeEqual(a: string, b: string): boolean {
 }
 
 /**
- * Check if authentication is required (token is configured)
+ * Check if Pool Mode is enabled (MCP_AUTH_TOKEN is configured)
+ * 
+ * Pool Mode: MCP_AUTH_TOKEN set → auth required, uses EXA_API_KEYS
+ * Passthrough Mode: MCP_AUTH_TOKEN not set → no auth, uses client key
  */
 export function isAuthRequired(): boolean {
   return !!getAuthToken();

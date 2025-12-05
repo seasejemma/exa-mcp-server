@@ -49,10 +49,14 @@ const sessions = new Map<string, StreamableHTTPServerTransport>();
 
 /**
  * Parse enabled tools from environment variable
+ * Default: our preferred tool set
  */
-function getEnabledTools(): string[] | undefined {
+function getEnabledTools(): string[] {
   const toolsEnv = Deno.env.get('ENABLED_TOOLS') || Deno.env.get('EXA_ENABLED_TOOLS');
-  if (!toolsEnv) return undefined;
+  if (!toolsEnv) {
+    // Default enabled tools
+    return ['web_search_exa', 'get_code_context_exa', 'crawling_exa', 'deep_researcher_start', 'deep_researcher_check'];
+  }
   
   return toolsEnv.split(',').map((t: string) => t.trim()).filter((t: string) => t.length > 0);
 }
@@ -62,6 +66,37 @@ function getEnabledTools(): string[] | undefined {
  */
 function isDebugMode(): boolean {
   return Deno.env.get('DEBUG') === 'true' || Deno.env.get('EXA_DEBUG') === 'true';
+}
+
+/**
+ * Working Mode Detection
+ * 
+ * Pool Mode (our mode):
+ *   - MCP_AUTH_TOKEN is set → requires auth, uses EXA_API_KEYS pool only
+ * 
+ * Passthrough Mode (original mode):
+ *   - MCP_AUTH_TOKEN not set → no auth, uses client-provided key
+ */
+function isPoolMode(): boolean {
+  return !!Deno.env.get('MCP_AUTH_TOKEN');
+}
+
+/**
+ * Extract API key from request in passthrough mode
+ * Supports: query param (?exaApiKey=...) or header (X-Exa-Api-Key: ...)
+ */
+function extractPassthroughKey(req: Request): string | undefined {
+  const url = new URL(req.url);
+  
+  // Check query parameter first (original exa-mcp-server behavior)
+  const queryKey = url.searchParams.get('exaApiKey');
+  if (queryKey) return queryKey;
+  
+  // Check header
+  const headerKey = req.headers.get('X-Exa-Api-Key');
+  if (headerKey) return headerKey;
+  
+  return undefined;
 }
 
 /**
@@ -192,10 +227,15 @@ function createServer(): McpServer {
 
 /**
  * Handle incoming HTTP requests
+ * 
+ * Two working modes:
+ * - Pool Mode: MCP_AUTH_TOKEN set → auth required, uses EXA_API_KEYS
+ * - Passthrough Mode: MCP_AUTH_TOKEN not set → no auth, uses client key
  */
 async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const debug = isDebugMode();
+  const poolMode = isPoolMode();
 
   // Health check endpoint
   if (url.pathname === '/health' || url.pathname === '/') {
@@ -204,7 +244,8 @@ async function handleRequest(req: Request): Promise<Response> {
         status: 'ok',
         server: 'exa-mcp-server',
         version: '3.1.2',
-        authRequired: isAuthRequired(),
+        mode: poolMode ? 'pool' : 'passthrough',
+        authRequired: poolMode,
       }), {
         headers: { 'Content-Type': 'application/json' },
       });
@@ -213,14 +254,31 @@ async function handleRequest(req: Request): Promise<Response> {
 
   // MCP endpoint
   if (url.pathname === '/mcp' || url.pathname === '/') {
-    // Validate authorization
-    const authHeader = req.headers.get('Authorization');
-    if (!validateAuthToken(authHeader)) {
-      const unauthorized = createUnauthorizedResponse();
-      return new Response(JSON.stringify(unauthorized.body), {
-        status: unauthorized.status,
-        headers: unauthorized.headers,
-      });
+    // Mode-specific authentication
+    if (poolMode) {
+      // Pool Mode: require MCP auth token
+      const authHeader = req.headers.get('Authorization');
+      if (!validateAuthToken(authHeader)) {
+        const unauthorized = createUnauthorizedResponse();
+        return new Response(JSON.stringify(unauthorized.body), {
+          status: unauthorized.status,
+          headers: unauthorized.headers,
+        });
+      }
+    } else {
+      // Passthrough Mode: require client-provided API key
+      const clientKey = extractPassthroughKey(req);
+      if (!clientKey) {
+        return new Response(JSON.stringify({
+          error: 'Missing API key',
+          message: 'Provide exaApiKey query param or X-Exa-Api-Key header',
+        }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      // Store key in request context for tools to use
+      (req as any).__exaApiKey = clientKey;
     }
 
     // Handle MCP protocol

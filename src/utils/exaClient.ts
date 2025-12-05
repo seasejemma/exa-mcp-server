@@ -74,7 +74,7 @@ function extractStatusCode(error: unknown): number {
 }
 
 export interface ExaRequestConfig {
-  exaApiKey?: string;  // Optional override key (for backward compatibility)
+  exaApiKey?: string;  // Client-provided key (for passthrough mode)
   timeout?: number;
   method?: 'GET' | 'POST';  // HTTP method (default: POST)
 }
@@ -85,32 +85,57 @@ export interface ExaRequestResult<T> {
 }
 
 /**
+ * Check if server is in Pool Mode (MCP_AUTH_TOKEN set)
+ * - Pool Mode: uses EXA_API_KEYS with rotation
+ * - Passthrough Mode: uses client-provided key
+ */
+function isPoolMode(): boolean {
+  if (isDeno) {
+    return !!(globalThis as any).Deno.env.get('MCP_AUTH_TOKEN');
+  }
+  if (typeof process !== 'undefined' && process.env) {
+    return !!process.env.MCP_AUTH_TOKEN;
+  }
+  return false;
+}
+
+/**
  * Make a request to the Exa API with automatic key rotation
+ * 
+ * Working modes:
+ * - Pool Mode (MCP_AUTH_TOKEN set): Use EXA_API_KEYS with rotation
+ * - Passthrough Mode: Use config.exaApiKey (client-provided)
  */
 export async function makeExaRequest<T>(
   endpoint: string,
   data: object | null,
   config: ExaRequestConfig = {}
 ): Promise<T> {
-  const keyManager = getApiKeyManager();
-  await keyManager.initialize();
-
-  // Use override key if provided, otherwise get from manager
-  let apiKey = config.exaApiKey;
+  const poolMode = isPoolMode();
+  
+  let apiKey: string | null = null;
   let usingManagedKey = false;
 
-  if (!apiKey) {
-    apiKey = keyManager.getActiveKey() || '';
-    usingManagedKey = true;
-  }
-
-  if (!apiKey) {
-    throw new Error('No API key available. All keys may be exhausted or in cooldown.');
+  if (poolMode) {
+    // Pool Mode: use EXA_API_KEYS with rotation (requires initialization)
+    const keyManager = getApiKeyManager();
+    await keyManager.initialize();
+    
+    apiKey = keyManager.getActiveKey();
+    if (apiKey) {
+      usingManagedKey = true;
+    } else {
+      throw new Error('No API key available. All keys may be exhausted or in cooldown.');
+    }
+  } else {
+    // Passthrough Mode: use client-provided key
+    apiKey = config.exaApiKey || null;
+    if (!apiKey) {
+      throw new Error('No API key provided. In passthrough mode, client must provide exaApiKey.');
+    }
   }
 
   const timeout = config.timeout || 25000;
-
-  // Attempt the request
   const method = config.method || 'POST';
   
   try {
@@ -120,10 +145,11 @@ export async function makeExaRequest<T>(
     const statusCode = extractStatusCode(error);
     const errorMessage = extractErrorMessage(error);
 
-    // Check if this is a balance/quota error and we're using managed keys
-    if (usingManagedKey && isBalanceError(statusCode, errorMessage)) {
+    // Only attempt rotation in Pool Mode with managed keys
+    if (poolMode && usingManagedKey && isBalanceError(statusCode, errorMessage)) {
       log(`[ExaClient] Balance/quota error detected (${statusCode}): ${errorMessage}`);
       
+      const keyManager = getApiKeyManager();
       const rotated = await keyManager.markCurrentKeyFailed(errorMessage);
       
       if (rotated) {
@@ -134,7 +160,6 @@ export async function makeExaRequest<T>(
           try {
             return await executeRequest<T>(endpoint, data, newKey, timeout, method);
           } catch (retryError) {
-            // If retry also fails, throw the original error context
             log(`[ExaClient] Retry also failed: ${extractErrorMessage(retryError)}`);
             throw retryError;
           }
@@ -148,7 +173,7 @@ export async function makeExaRequest<T>(
       );
     }
 
-    // Not a balance error or not using managed keys, rethrow
+    // Not a balance error or passthrough mode, rethrow
     throw error;
   }
 }
