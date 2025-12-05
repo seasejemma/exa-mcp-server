@@ -14,7 +14,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { toFetchResponse, toReqRes } from "fetch-to-node";
 import { validateAuthToken, createUnauthorizedResponse, isAuthRequired } from "./utils/authMiddleware.ts";
 import { getApiKeyManager } from "./utils/apiKeyManager.ts";
-import { log } from "./utils/logger.ts";
+import { log, logInfo, logError, logDebug } from "./utils/logger.ts";
 
 // Import tool registration functions
 import { registerWebSearchTool } from "./tools/webSearch.ts";
@@ -115,9 +115,9 @@ function createServer(): McpServer {
   });
 
   if (debug) {
-    log("[Deno] Starting Exa MCP Server in debug mode");
+    logDebug("Starting Exa MCP Server in debug mode");
     if (enabledTools) {
-      log(`[Deno] Enabled tools from env: ${enabledTools.join(', ')}`);
+      logDebug(`Enabled tools from env: ${enabledTools.join(', ')}`);
     }
   }
 
@@ -179,7 +179,7 @@ function createServer(): McpServer {
   }
 
   if (debug) {
-    log(`[Deno] Registered ${registeredTools.length} tools: ${registeredTools.join(', ')}`);
+    logDebug(`Registered ${registeredTools.length} tools: ${registeredTools.join(', ')}`);
   }
 
   // Register prompts
@@ -354,7 +354,7 @@ async function handleMcpPost(req: Request, debug: boolean): Promise<Response> {
         enableJsonResponse: true,
         onsessioninitialized: (id: string) => {
           sessions.set(id, transport);
-          if (debug) log(`[Deno] Session initialized: ${id}`);
+          if (debug) logDebug(`Session initialized: ${id}`);
         },
       });
 
@@ -374,7 +374,7 @@ async function handleMcpPost(req: Request, debug: boolean): Promise<Response> {
     // Use fetch-to-node to handle the request
     return await handleMCPRequest(transport, originalRequest);
   } catch (error) {
-    log(`[Deno] Error handling POST: ${error}`);
+    logError(`Error handling POST: ${error}`);
     return new Response(JSON.stringify({
       jsonrpc: '2.0',
       error: { code: -32603, message: 'Internal error' },
@@ -401,7 +401,7 @@ async function handleMcpGet(req: Request, debug: boolean): Promise<Response> {
   try {
     return await handleMCPRequest(transport, req);
   } catch (error) {
-    log(`[Deno] Error handling GET: ${error}`);
+    logError(`Error handling GET: ${error}`);
     return new Response('Internal error', { status: 500 });
   }
 }
@@ -416,7 +416,7 @@ async function handleMcpDelete(req: Request, debug: boolean): Promise<Response> 
     const transport = sessions.get(sessionId)!;
     await transport.close();
     sessions.delete(sessionId);
-    if (debug) log(`[Deno] Session closed: ${sessionId}`);
+    if (debug) logDebug(`Session closed: ${sessionId}`);
   }
 
   return new Response(null, { status: 204 });
@@ -431,19 +431,19 @@ async function main() {
   await keyManager.initialize();
 
   const status = keyManager.getStatus();
-  log(`[Deno] API Key Manager initialized: ${status.total} key(s), ${status.active} active`);
+  logInfo(`API Key Manager: ${status.total} key(s), ${status.active} active`);
 
   const port = parseInt(Deno.env.get('PORT') || '8000', 10);
   const hostname = Deno.env.get('HOSTNAME') || '0.0.0.0';
 
-  log(`[Deno] Starting Exa MCP Server on ${hostname}:${port}`);
-  log(`[Deno] Auth required: ${isAuthRequired()}`);
+  logInfo(`Starting Exa MCP Server on ${hostname}:${port}`);
+  logInfo(`Auth required: ${isAuthRequired()}`);
 
   Deno.serve({ port, hostname }, handleRequest);
 }
 
 // Run the server
 main().catch((error) => {
-  log(`[Deno] Fatal error: ${error}`);
+  logError(`Fatal error: ${error}`);
   throw error;
 });

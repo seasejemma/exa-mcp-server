@@ -5,7 +5,7 @@
  * Supports Deno KV for persistence (when available) or falls back to in-memory storage.
  */
 
-import { log } from "./logger.js";
+import { logInfo, logDebug, logError } from "./logger.js";
 
 // Declare process for Node.js environment (will be available at runtime)
 declare const process: { env: Record<string, string | undefined> } | undefined;
@@ -60,9 +60,9 @@ class ApiKeyManager {
     const keyList: string[] = keysEnv.split(',').map((k: string) => k.trim()).filter((k: string) => k.length > 0);
 
     if (keyList.length === 0) {
-      log('[ApiKeyManager] Warning: No API keys found in EXA_API_KEYS or EXA_API_KEY');
+      logError('No API keys found in EXA_API_KEYS or EXA_API_KEY');
     } else {
-      log(`[ApiKeyManager] Initialized with ${keyList.length} API key(s)`);
+      logDebug(`Initialized with ${keyList.length} API key(s)`);
     }
 
     this.keys = keyList.map((key: string) => ({
@@ -77,9 +77,9 @@ class ApiKeyManager {
       try {
         this.kv = await (globalThis as any).Deno.openKv();
         await this.loadStateFromKv();
-        log('[ApiKeyManager] Deno KV initialized for state persistence');
+        logDebug('Deno KV initialized for state persistence');
       } catch (error) {
-        log(`[ApiKeyManager] Deno KV not available, using in-memory state: ${error}`);
+        logDebug(`Deno KV not available, using in-memory state: ${error}`);
       }
     }
 
@@ -175,7 +175,7 @@ class ApiKeyManager {
       attempts++;
     }
 
-    log('[ApiKeyManager] All API keys are exhausted or in cooldown');
+    logError('All API keys are exhausted or in cooldown');
     return null;
   }
 
@@ -190,11 +190,11 @@ class ApiKeyManager {
     keyState.failedAt = Date.now();
     keyState.retryCount++;
 
-    log(`[ApiKeyManager] Key ${this.currentIndex + 1}/${this.keys.length} failed (attempt ${keyState.retryCount}/${this.config.maxRetries}): ${reason}`);
+    logInfo(`Key ${this.currentIndex + 1}/${this.keys.length} failed (attempt ${keyState.retryCount}/${this.config.maxRetries}): ${reason}`);
 
     if (keyState.retryCount >= this.config.maxRetries) {
       keyState.isDead = true;
-      log(`[ApiKeyManager] Key ${this.currentIndex + 1} marked as dead after ${this.config.maxRetries} failures`);
+      logInfo(`Key ${this.currentIndex + 1} marked as dead after ${this.config.maxRetries} failures`);
     }
 
     // Persist state
@@ -215,7 +215,7 @@ class ApiKeyManager {
       this.currentIndex = (this.currentIndex + 1) % this.keys.length;
       
       if (this.isKeyAvailable(this.keys[this.currentIndex])) {
-        log(`[ApiKeyManager] Rotated to key ${this.currentIndex + 1}/${this.keys.length}`);
+        logDebug(`Rotated to key ${this.currentIndex + 1}/${this.keys.length}`);
         return true;
       }
     } while (this.currentIndex !== startIndex);
@@ -253,7 +253,7 @@ class ApiKeyManager {
       await this.saveStateToKv(i);
     }
     this.currentIndex = 0;
-    log('[ApiKeyManager] All keys have been reset');
+    logInfo('All API keys have been reset');
   }
 }
 
