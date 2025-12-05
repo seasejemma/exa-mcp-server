@@ -8,13 +8,20 @@
  * - Usage tracking (track token usage for analytics)
  * - Deno KV persistence (when available)
  * 
- * Configuration via environment variable MCP_AUTH_TOKENS:
- * Format: "token:userId:role:expiry" (userId, role, expiry are optional)
+ * Configuration:
+ * 
+ * 1. Admin token (single): MCP_AUTH_TOKEN
+ *    - For backward compatibility
+ *    - Always has 'admin' role
+ * 
+ * 2. User tokens (multiple): USER_TOKENS
+ *    Format: "token:userId:expiry" (userId and expiry are optional)
+ *    - Always has 'user' role
  * 
  * Examples:
- * - "abc123:alice:admin:2025-12-31" - Admin token for alice, expires Dec 31, 2025
- * - "xyz789:bob:user:never" - User token for bob, never expires (explicit)
- * - "def456:charlie:admin" - Admin token for charlie, never expires
+ * - "abc123:alice:2025-12-31" - User token for alice, expires Dec 31, 2025
+ * - "xyz789:bob:never" - User token for bob, never expires (explicit)
+ * - "def456:charlie" - User token for charlie, never expires
  * - "simple_token" - Anonymous user token, never expires
  * 
  * Expiry values:
@@ -23,10 +30,8 @@
  * - Empty or omitted - Never expires (implicit)
  * 
  * Roles:
- * - "admin" - Can access /admin/* endpoints
- * - "user" (default) - Can only access MCP endpoints
- * 
- * For backward compatibility, MCP_AUTH_TOKEN is still supported as a single admin token.
+ * - "admin" - Can access /admin/* endpoints (MCP_AUTH_TOKEN only)
+ * - "user" - Can only access MCP endpoints (USER_TOKENS)
  */
 
 import { logInfo, logDebug, logError } from "./logger.js";
@@ -119,28 +124,30 @@ class TokenManager {
   /**
    * Parse tokens configuration from environment variables
    * 
-   * Format: "token:userId:role:expiry" (all after token are optional)
+   * USER_TOKENS format: "token:userId:expiry" (userId and expiry are optional)
    * - token: The authentication token (required)
    * - userId: User identifier (optional)
-   * - role: "admin" or "user" (optional, defaults to "user")
    * - expiry: ISO 8601 date string (optional)
+   * - All USER_TOKENS have 'user' role
+   * 
+   * MCP_AUTH_TOKEN: Single admin token for backward compatibility
    */
   private getTokensConfig(): Array<{ token: string; userId: string | null; role: TokenRole; expiresAt: Date | null }> {
     let tokensEnv = '';
     let singleToken = '';
 
     if (isDeno) {
-      tokensEnv = (globalThis as any).Deno.env.get('MCP_AUTH_TOKENS') || '';
+      tokensEnv = (globalThis as any).Deno.env.get('USER_TOKENS') || '';
       singleToken = (globalThis as any).Deno.env.get('MCP_AUTH_TOKEN') || '';
     } else if (typeof process !== 'undefined' && process.env) {
-      tokensEnv = process.env.MCP_AUTH_TOKENS || '';
+      tokensEnv = process.env.USER_TOKENS || '';
       singleToken = process.env.MCP_AUTH_TOKEN || '';
     }
 
     const configs: Array<{ token: string; userId: string | null; role: TokenRole; expiresAt: Date | null }> = [];
 
-    // Parse multi-token config (MCP_AUTH_TOKENS)
-    // Format: token:userId:role:expiry
+    // Parse multi-token config (USER_TOKENS)
+    // Format: token:userId:expiry (all have 'user' role)
     if (tokensEnv) {
       const tokenEntries = tokensEnv.split(',').map(s => s.trim()).filter(s => s.length > 0);
       
@@ -148,13 +155,12 @@ class TokenManager {
         const parts = entry.split(':');
         const token = parts[0]?.trim();
         const userId = parts[1]?.trim() || null;
-        const roleStr = parts[2]?.trim()?.toLowerCase();
-        const expiryStr = parts[3]?.trim()?.toLowerCase();
+        const expiryStr = parts[2]?.trim()?.toLowerCase();
         
         if (!token) continue;
 
-        // Parse role (default to 'user')
-        const role: TokenRole = roleStr === 'admin' ? 'admin' : 'user';
+        // USER_TOKENS always have 'user' role
+        const role: TokenRole = 'user';
 
         // Parse expiry date
         // Special values: "never", "infinite", "∞", "" → null (never expires)

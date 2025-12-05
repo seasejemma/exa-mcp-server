@@ -5,8 +5,8 @@
  * Supports multi-token configuration with user allocation and expiry control.
  * 
  * Configuration:
- * - MCP_AUTH_TOKENS: Multi-token with user/expiry (format: "token1:user1:expiry1,token2:user2,...")
- * - MCP_AUTH_TOKEN: Single token (backward compatible)
+ * - MCP_AUTH_TOKEN: Single admin token (full access)
+ * - USER_TOKENS: Multi-token with user/expiry (format: "token1:user1:expiry1,token2:user2,...")
  */
 
 import { getTokenManager, TokenValidationResult } from "./tokenManager.js";
@@ -25,10 +25,10 @@ function hasAuthTokens(): boolean {
   let singleToken = '';
 
   if (isDeno) {
-    tokensEnv = (globalThis as any).Deno.env.get('MCP_AUTH_TOKENS') || '';
+    tokensEnv = (globalThis as any).Deno.env.get('USER_TOKENS') || '';
     singleToken = (globalThis as any).Deno.env.get('MCP_AUTH_TOKEN') || '';
   } else if (typeof process !== 'undefined' && process.env) {
-    tokensEnv = process.env.MCP_AUTH_TOKENS || '';
+    tokensEnv = process.env.USER_TOKENS || '';
     singleToken = process.env.MCP_AUTH_TOKEN || '';
   }
 

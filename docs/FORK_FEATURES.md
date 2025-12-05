@@ -9,10 +9,9 @@ These enhancements are designed for **self-hosted deployments** (e.g., Deno Depl
 ## Overview
 
 | Feature | Description |
-|---------|-------------|
-| **Multi-Token Authentication** | Support multiple auth tokens instead of just one |
+|---------|--------------|
+| **Multi-Token Authentication** | Support multiple user tokens plus one admin token |
 | **User Allocation** | Associate tokens with user identifiers for tracking |
-| **Role-Based Access Control** | Admin vs User roles with different permissions |
 | **Token Expiry** | Set expiration dates on tokens |
 | **Usage Tracking** | Track per-token usage statistics |
 | **Admin API** | Endpoint to view token statistics |
@@ -24,40 +23,43 @@ These enhancements are designed for **self-hosted deployments** (e.g., Deno Depl
 
 ### What It Does
 
-Instead of a single `MCP_AUTH_TOKEN`, you can now configure multiple tokens with `MCP_AUTH_TOKENS`. Each token can have its own user, role, and expiry settings.
+The server supports two types of tokens:
+
+1. **Admin Token** (`MCP_AUTH_TOKEN`): Single token with full access
+2. **User Tokens** (`USER_TOKENS`): Multiple tokens with MCP-only access
 
 ### Configuration
 
 ```bash
-# Old way (still supported - creates single admin token)
-MCP_AUTH_TOKEN="single-secret-token"
+# Admin token (full access including /admin/* endpoints)
+MCP_AUTH_TOKEN="admin-secret-token"
 
-# New way - multiple tokens
-MCP_AUTH_TOKENS="token1:user1:role1:expiry1,token2:user2:role2:expiry2,..."
+# User tokens (MCP access only)
+USER_TOKENS="token1:user1:expiry1,token2:user2:expiry2,..."
 ```
 
 ### Token Format
 
+**USER_TOKENS format:**
 ```
-token:userId:role:expiry
+token:userId:expiry
 ```
 
 - **token** (required): The secret token string
 - **userId** (optional): Identifier for the user (for tracking)
-- **role** (optional): `admin` or `user` (default: `user`)
 - **expiry** (optional): When the token expires
 
 ### Examples
 
 ```bash
-# Admin token for alice, expires Dec 31, 2025
-"abc123:alice:admin:2025-12-31"
+# User token for alice, expires Dec 31, 2025
+"abc123:alice:2025-12-31"
 
 # User token for bob, never expires
-"xyz789:bob:user:never"
+"xyz789:bob:never"
 
-# Admin token, no user ID, never expires
-"def456::admin"
+# User token, no user ID, never expires
+"def456"
 
 # Minimal: anonymous user token, never expires
 "simple_token"
@@ -80,7 +82,7 @@ Each token can be associated with a user identifier. This enables:
 Include the user ID as the second field in the token configuration:
 
 ```bash
-MCP_AUTH_TOKENS="token1:alice:user,token2:bob:user,token3:charlie:admin"
+USER_TOKENS="token1:alice,token2:bob,token3:charlie"
 ```
 
 ### Statistics Output
@@ -102,17 +104,17 @@ MCP_AUTH_TOKENS="token1:alice:user,token2:bob:user,token3:charlie:admin"
 
 ### What It Does
 
-Tokens have one of two roles that determine what endpoints they can access:
+Tokens are assigned roles based on how they're configured:
 
-| Role | Description |
-|------|-------------|
-| `admin` | Full access to all endpoints including `/admin/*` |
-| `user` | Access to MCP endpoints only |
+| Token Source | Role | Description |
+|--------------|------|-------------|
+| `MCP_AUTH_TOKEN` | `admin` | Full access to all endpoints including `/admin/*` |
+| `USER_TOKENS` | `user` | Access to MCP endpoints only |
 
 ### Permissions Matrix
 
 | Endpoint | `user` Role | `admin` Role |
-|----------|-------------|--------------|
+|----------|-------------|---------------|
 | `GET /` `/health` | ✅ Allowed | ✅ Allowed |
 | `GET /mcp/usage` | ✅ Allowed | ✅ Allowed |
 | `POST /mcp` | ✅ Allowed | ✅ Allowed |
@@ -121,20 +123,12 @@ Tokens have one of two roles that determine what endpoints they can access:
 ### Configuration
 
 ```bash
-# Explicit admin role
-"admin-token:alice:admin"
+# Admin token (full access)
+MCP_AUTH_TOKEN="admin-token-here"
 
-# Explicit user role
-"user-token:bob:user"
-
-# Default is user role
-"basic-token:charlie"      # → role = user
-"anonymous-token"          # → role = user
+# User tokens (MCP access only)
+USER_TOKENS="user-token:bob,user-token2:charlie"
 ```
-
-### Backward Compatibility
-
-When using the legacy `MCP_AUTH_TOKEN` (single token), it defaults to `admin` role to maintain backward compatibility.
 
 ---
 
@@ -160,14 +154,14 @@ Tokens can have an expiration date. Expired tokens are rejected with a 403 Forbi
 ### Examples
 
 ```bash
-# Expires on specific date
-"temp-token:guest:user:2025-01-31"
+# Expires on specific date (USER_TOKENS)
+"temp-token:guest:2025-01-31"
 
 # Explicitly never expires
-"permanent:admin:admin:never"
+"permanent:admin:never"
 
 # Implicitly never expires (field omitted)
-"forever:user:user"
+"forever:user"
 ```
 
 ### Expired Token Response
@@ -277,7 +271,7 @@ The server operates in one of two modes:
 
 ### Pool Mode
 
-**When:** `MCP_AUTH_TOKEN` or `MCP_AUTH_TOKENS` is set
+**When:** `MCP_AUTH_TOKEN` or `USER_TOKENS` is set
 
 - Clients authenticate with bearer tokens
 - Server uses shared `EXA_API_KEYS` for all requests
@@ -301,8 +295,11 @@ The server operates in one of two modes:
 # Exa API keys (the server uses these for all requests)
 EXA_API_KEYS=exa-key-1,exa-key-2
 
-# Auth tokens for your users
-MCP_AUTH_TOKENS=admin-secret:admin:admin:never,alice-token:alice:user:2025-12-31,bob-token:bob:user:never
+# Admin token (full access)
+MCP_AUTH_TOKEN=admin-secret
+
+# User tokens (MCP access only)
+USER_TOKENS=alice-token:alice:2025-12-31,bob-token:bob:never
 
 # Tools to enable
 ENABLED_TOOLS=web_search_exa,get_code_context_exa,crawling_exa

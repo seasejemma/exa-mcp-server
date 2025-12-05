@@ -18,20 +18,25 @@ Tokens are configured via environment variables:
 
 | Variable | Description |
 |----------|-------------|
-| `MCP_AUTH_TOKENS` | Multi-token configuration (recommended) |
-| `MCP_AUTH_TOKEN` | Single admin token (backward compatible) |
+| `MCP_AUTH_TOKEN` | Single admin token (full access) |
+| `USER_TOKENS` | Multiple user tokens (MCP access only) |
 
 ### Token Format
 
+**MCP_AUTH_TOKEN** (admin):
 ```
-token:userId:role:expiry
+token
+```
+
+**USER_TOKENS** (users):
+```
+token:userId:expiry
 ```
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `token` | ✅ Yes | - | The authentication token string |
 | `userId` | No | `null` | User identifier for tracking/analytics |
-| `role` | No | `user` | Access level: `admin` or `user` |
 | `expiry` | No | never | Expiration date or special value |
 
 ### Expiry Values
@@ -49,11 +54,11 @@ token:userId:role:expiry
 ### Configuration Examples
 
 ```bash
-# Multiple tokens with different configurations
-MCP_AUTH_TOKENS="admin-key:alice:admin:never,user-key:bob:user:2025-12-31,temp-key:guest:user:2025-01-15"
+# Admin token (full access)
+MCP_AUTH_TOKEN="admin-secret-token"
 
-# Single admin token (backward compatible)
-MCP_AUTH_TOKEN="my-secret-token"
+# User tokens with different configurations
+USER_TOKENS="user-key:bob:2025-12-31,temp-key:guest:2025-01-15,anon-key"
 ```
 
 ---
@@ -330,7 +335,7 @@ Method not allowed
 
 ### Pool Mode
 
-When `MCP_AUTH_TOKEN` or `MCP_AUTH_TOKENS` is configured:
+When `MCP_AUTH_TOKEN` or `USER_TOKENS` is configured:
 
 - Clients must authenticate with bearer tokens
 - Server uses `EXA_API_KEYS` for Exa API calls

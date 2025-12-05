@@ -275,57 +275,56 @@ npx exa-mcp-server tools=web_search_exa,deep_search_exa,get_code_context_exa,cra
 
 ## Self-Hosted Deployment with Multi-Token Authentication 🔐
 
-When self-hosting the Exa MCP Server (e.g., on Deno Deploy), you can configure multi-token authentication with user allocation, role-based access, and expiry control.
+When self-hosting the Exa MCP Server (e.g., on Deno Deploy), you can configure multi-token authentication with user allocation and expiry control.
 
 ### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `MCP_AUTH_TOKENS` | Multi-token configuration (recommended) |
-| `MCP_AUTH_TOKEN` | Single admin token (backward compatible) |
+| `MCP_AUTH_TOKEN` | Admin token (full access) |
+| `USER_TOKENS` | User tokens (MCP access only) |
 | `EXA_API_KEYS` | Comma-separated Exa API keys for pool mode |
 | `ENABLED_TOOLS` | Comma-separated list of tools to enable |
 
 ### Multi-Token Configuration
 
-Configure multiple tokens using `MCP_AUTH_TOKENS`:
+Configure multiple user tokens using `USER_TOKENS`:
 
 ```bash
-# Format: token:userId:role:expiry (userId, role, expiry are optional)
-MCP_AUTH_TOKENS="token1:alice:admin:2025-12-31,token2:bob:user,token3:charlie"
+# Format: token:userId:expiry (userId and expiry are optional)
+USER_TOKENS="token1:alice:2025-12-31,token2:bob,token3:charlie"
 ```
 
-**Token Format:** `token:userId:role:expiry`
+**Token Format:** `token:userId:expiry`
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `token` | Yes | The authentication token |
 | `userId` | No | User identifier for tracking |
-| `role` | No | `admin` or `user` (default: `user`) |
 | `expiry` | No | ISO 8601 date (e.g., `2025-12-31`) |
 
 **Examples:**
 
 ```bash
-# Admin token with user and expiry
-"abc123:alice:admin:2025-12-31"
+# User token with user and expiry
+"abc123:alice:2025-12-31"
 
-# User token (default role) with no expiry
-"xyz789:bob:user"
+# User token with no expiry
+"xyz789:bob"
 
 # Simple user token (just token and userId)
 "def456:charlie"
 
-# Anonymous user token (no user, no role, no expiry)
+# Anonymous user token (no user, no expiry)
 "simple_token"
 ```
 
 ### Roles
 
-| Role | MCP Endpoints (`/mcp`) | Admin Endpoints (`/admin/*`) |
-|------|------------------------|------------------------------|
-| `admin` | ✅ Allowed | ✅ Allowed |
-| `user` | ✅ Allowed | ❌ Forbidden |
+| Token Source | Role | MCP Endpoints (`/mcp`) | Admin Endpoints (`/admin/*`) |
+|--------------|------|------------------------|------------------------------|
+| `MCP_AUTH_TOKEN` | `admin` | ✅ Allowed | ✅ Allowed |
+| `USER_TOKENS` | `user` | ✅ Allowed | ❌ Forbidden |
 
 ### Endpoints
 
@@ -338,14 +337,14 @@ MCP_AUTH_TOKENS="token1:alice:admin:2025-12-31,token2:bob:user,token3:charlie"
 ### Token Features
 
 - **User Allocation**: Associate tokens with user identifiers for tracking
-- **Role-Based Access**: Admin tokens can access `/admin/*` endpoints
+- **Role-Based Access**: `MCP_AUTH_TOKEN` = admin, `USER_TOKENS` = user
 - **Expiry Control**: Tokens can have optional expiration dates (ISO 8601 format)
 - **Usage Tracking**: Track token usage counts and last used timestamps
 - **Deno KV Persistence**: Token state persists across server restarts
 
 ### Working Modes
 
-1. **Pool Mode** (MCP_AUTH_TOKEN(S) set):
+1. **Pool Mode** (`MCP_AUTH_TOKEN` or `USER_TOKENS` set):
    - Clients authenticate with bearer tokens
    - Server uses shared `EXA_API_KEYS` pool
    - Usage tracking and expiry enforcement
@@ -359,7 +358,8 @@ MCP_AUTH_TOKENS="token1:alice:admin:2025-12-31,token2:bob:user,token3:charlie"
 ```bash
 # Deno Deploy environment variables
 EXA_API_KEYS=key1,key2,key3
-MCP_AUTH_TOKENS=admin-token:admin:admin:2026-01-01,user-token-1:alice:user,user-token-2:bob:user:2025-12-31
+MCP_AUTH_TOKEN=admin-token
+USER_TOKENS=user-token-1:alice,user-token-2:bob:2025-12-31
 ENABLED_TOOLS=web_search_exa,get_code_context_exa,crawling_exa
 ```
 
