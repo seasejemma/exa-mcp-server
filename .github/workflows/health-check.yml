@@ -7,16 +7,13 @@ on:
     branches: [main]
   workflow_dispatch:  # Manual trigger for testing
 
-env:
-  # MCP_SERVER_ENDPOINT is set via GitHub Secrets
-  DEPLOY_URL_FALLBACK: https://exa-mcp-gjr3nzgq47rq.seasejemma.deno.net
-
 jobs:
   health-check:
     name: Health Check & MCP Tests
     runs-on: ubuntu-latest
     env:
-      DEPLOY_URL: ${{ secrets.MCP_SERVER_ENDPOINT }}
+      # Use MCP_SERVER_ENDPOINT if set, otherwise use fallback
+      DEPLOY_URL: ${{ vars.MCP_SERVER_ENDPOINT || 'https://exa-mcp.seasejemma.deno.net' }}
     # Wait for Deno Deploy to complete (usually takes 30-60 seconds)
     # We add a delay at the start of the job
 
@@ -28,8 +25,8 @@ jobs:
 
       - name: Check /health endpoint
         run: |
-          echo "Testing health endpoint..."
-          RESPONSE=$(curl -s -w "\n%{http_code}" "${{ env.DEPLOY_URL }}/health")
+          echo "Testing health endpoint at $DEPLOY_URL..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" "$DEPLOY_URL/health")
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | sed '$d')
           
@@ -48,7 +45,7 @@ jobs:
           MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
         run: |
           echo "Testing MCP initialize..."
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ env.DEPLOY_URL }}/mcp" \
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$DEPLOY_URL/mcp" \
             -H "Content-Type: application/json" \
             -H "Accept: application/json, text/event-stream" \
             -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
@@ -98,7 +95,7 @@ jobs:
           echo "Testing tools/list..."
           
           # First, we need to initialize a new session and get the session ID from headers
-          INIT_RESPONSE=$(curl -s -i -X POST "${{ env.DEPLOY_URL }}/mcp" \
+          INIT_RESPONSE=$(curl -s -i -X POST "$DEPLOY_URL/mcp" \
             -H "Content-Type: application/json" \
             -H "Accept: application/json, text/event-stream" \
             -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
@@ -123,7 +120,7 @@ jobs:
           fi
           
           # Now call tools/list with the session ID
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ env.DEPLOY_URL }}/mcp" \
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$DEPLOY_URL/mcp" \
             -H "Content-Type: application/json" \
             -H "Accept: application/json, text/event-stream" \
             -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
@@ -166,7 +163,7 @@ jobs:
           echo "Testing web_search_exa tool..."
           
           # Initialize session
-          INIT_RESPONSE=$(curl -s -i -X POST "${{ env.DEPLOY_URL }}/mcp" \
+          INIT_RESPONSE=$(curl -s -i -X POST "$DEPLOY_URL/mcp" \
             -H "Content-Type: application/json" \
             -H "Accept: application/json, text/event-stream" \
             -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
@@ -189,7 +186,7 @@ jobs:
           fi
           
           # Call web_search_exa with a simple query
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ env.DEPLOY_URL }}/mcp" \
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$DEPLOY_URL/mcp" \
             -H "Content-Type: application/json" \
             -H "Accept: application/json, text/event-stream" \
             -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
@@ -242,7 +239,7 @@ jobs:
           MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
         run: |
           echo "Testing /mcp/usage endpoint..."
-          RESPONSE=$(curl -s -w "\n%{http_code}" "${{ env.DEPLOY_URL }}/mcp/usage" \
+          RESPONSE=$(curl -s -w "\n%{http_code}" "$DEPLOY_URL/mcp/usage" \
             -H "Authorization: Bearer $MCP_AUTH_TOKEN")
           
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
@@ -271,6 +268,6 @@ jobs:
           echo "=========================================="
           echo "  Post-Deploy Health Check Summary"
           echo "=========================================="
-          echo "Deploy URL: ${{ env.DEPLOY_URL }}"
+          echo "Deploy URL: $DEPLOY_URL"
           echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "=========================================="
