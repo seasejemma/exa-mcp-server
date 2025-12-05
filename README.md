@@ -363,6 +363,60 @@ USER_TOKENS=user-token-1:alice,user-token-2:bob:2025-12-31
 ENABLED_TOOLS=web_search_exa,get_code_context_exa,crawling_exa
 ```
 
+### Adding Users
+
+#### Token Format
+
+User tokens follow the format: `token:userId:expiry`
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `token` | Yes | 16-character hex string (recommended) |
+| `userId` | No | User identifier for tracking |
+| `expiry` | No | ISO 8601 date (e.g., `2025-12-31`) or `never` |
+
+#### Generate a Token
+
+Use `openssl` to generate a secure random token:
+
+```bash
+# Generate a 16-character hex token
+openssl rand -hex 8
+# Output: a1b2c3d4e5f67890
+```
+
+#### Quick Add User
+
+To add a new user, append to `USER_TOKENS` environment variable:
+
+```bash
+# Current: USER_TOKENS=token1:alice
+# Add bob with expiry:
+USER_TOKENS=token1:alice,$(openssl rand -hex 8):bob:2025-12-31
+```
+
+#### Test New Token
+
+After updating environment variables and redeploying:
+
+```bash
+# Replace with your server URL and new token
+curl -s -X POST "https://your-server.deno.dev/mcp" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Authorization: Bearer NEW_TOKEN_HERE" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "initialize",
+    "params": {
+      "protocolVersion": "2024-11-05",
+      "capabilities": {},
+      "clientInfo": {"name": "test", "version": "1.0"}
+    },
+    "id": 1
+  }'
+```
+
 ### Client Usage
 
 ```bash
